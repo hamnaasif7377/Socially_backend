@@ -1,7 +1,6 @@
 {
   "name": "socially_backend",
   "version": "1.0.0",
-  "description": "",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,9 +10,20 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bcrypt": "^6.0.0",
+    "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "mysql2": "^3.15.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hamnaasif7377/Socially_backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hamnaasif7377/Socially_backend/issues"
+  },
+  "homepage": "https://github.com/hamnaasif7377/Socially_backend#readme",
+  "description": ""
 }
