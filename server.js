@@ -70,12 +70,13 @@ app.post("/login", (req, res) => {
 
         const user = results[0];
 
-        if (password === user.password) {
-            const { password, ...userData } = user;
-            res.json({ success: true, message: "Login successful", user: userData });
-        } else {
-            res.json({ success: false, message: "Invalid password" });
-        }
+        if (password.trim() === user.password.trim()) {
+    const { password, ...userData } = user;
+    res.json({ success: true, message: "Login successful", user: userData });
+} else {
+    res.json({ success: false, message: "Invalid password" });
+}
+
     });
 });
 
