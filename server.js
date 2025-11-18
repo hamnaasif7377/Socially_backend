@@ -42,15 +42,17 @@ app.post("/login", (req, res) => {
             return res.json({ success: false, message: "User not found" });
         }
 
-        const user = results[0];
+        const user = results[0]; 
 
         // Compare password
-        if (bcrypt.compareSync(password, user.password)) {
-            const { password, ...userData } = user; // Remove password from response
-            return res.json({ success: true, message: "Login successful", user: userData });
-        } else {
-            return res.json({ success: false, message: "Invalid password" });
-        }
+        // Compare password (plain text for testing only)
+if (password === user.password) {
+    const { password, ...userData } = user;
+    return res.json({ success: true, message: "Login successful", user: userData });
+} else {
+    return res.json({ success: false, message: "Invalid password" });
+}
+
     });
 });
 
