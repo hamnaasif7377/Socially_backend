@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
@@ -7,175 +8,325 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ============================================
-// MYSQL CONNECTION USING RAILWAY ENV VARIABLES
-// ============================================
+// MySQL connection pool
+const db = mysql.createPool({
+    host: process.env.MYSQLHOST,
+    user: process.env.MYSQLUSER,
+    password: process.env.MYSQLPASSWORD,
+    database: process.env.MYSQLDATABASE,
+    port: process.env.MYSQLPORT,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+});
 
-function connectWithRetry() {
-    const db = mysql.createPool({
-        host: process.env.DB_HOST,
-        user: process.env.DB_USER,
-        password: process.env.DB_PASS,
-        database: process.env.DB_NAME,
-        port: process.env.DB_PORT,
-        waitForConnections: true,
-        connectionLimit: 10,
-        queueLimit: 0
-    });
-
-    db.getConnection((err, conn) => {
-        if (err) {
-            console.error("❌ DB connection failed, retrying in 5s...", err.message);
-            setTimeout(connectWithRetry, 5000);
-        } else {
-            console.log("✓ Connected to MySQL");
-            conn.release();
-            createTables(db);
-        }
-    });
-
-    return db;
-}
-
-const db = connectWithRetry();
-
-// ============================================
-// CREATE TABLES (RUNS AUTOMATICALLY)
-// ============================================
-
-function createTables(db) {
-    console.log("✓ Creating tables if not exist...");
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS users (
-            uid VARCHAR(255) PRIMARY KEY,
-            username VARCHAR(100),
-            username_lower VARCHAR(100),
-            name VARCHAR(100),
-            lastname VARCHAR(100),
-            bio TEXT,
-            website VARCHAR(255),
-            email VARCHAR(255) UNIQUE,
-            dob VARCHAR(50),
-            profilePicture TEXT,
-            profileImage TEXT,
-            followersCount INT DEFAULT 0,
-            followingCount INT DEFAULT 0,
-            postCount INT DEFAULT 0,
-            password TEXT
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS user_followers (
-            follower_uid VARCHAR(255),
-            following_uid VARCHAR(255),
-            status ENUM('accepted','pending') DEFAULT 'accepted',
-            PRIMARY KEY (follower_uid, following_uid)
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS user_presence (
-            uid VARCHAR(255) PRIMARY KEY,
-            status VARCHAR(10),
-            lastSeen BIGINT
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS posts (
-            postId VARCHAR(255) PRIMARY KEY,
-            userId VARCHAR(255),
-            caption TEXT,
-            location VARCHAR(255),
-            timestamp BIGINT
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS post_images (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            postId VARCHAR(255),
-            imageUrl TEXT,
-            orderIndex INT
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS messages (
-            messageId VARCHAR(255) PRIMARY KEY,
-            senderId VARCHAR(255),
-            receiverId VARCHAR(255),
-            messageText TEXT,
-            timestamp BIGINT
-        )
-    `);
-
-    db.query(`
-        CREATE TABLE IF NOT EXISTS conversations (
-            user1_uid VARCHAR(255),
-            user2_uid VARCHAR(255),
-            lastMessage TEXT,
-            timestamp BIGINT,
-            PRIMARY KEY (user1_uid, user2_uid)
-        )
-    `);
-
-    console.log("✓ All tables ready!");
-}
+// Test database connection
+db.getConnection((err, connection) => {
+    if (err) {
+        console.error('Database connection failed:', err);
+    } else {
+        console.log('✓ Connected to MySQL database');
+        connection.release();
+    }
+});
 
 // ============================================
 // ROUTES
 // ============================================
 
-app.get("/", (req, res) => res.send("Server is running!"));
+// Root route
+app.get("/", (req, res) => {
+    res.send("Server is running!");
+});
 
-// REGISTER
+// ============================================
+// USER AUTHENTICATION
+// ============================================
+
+// Login endpoint
+app.post("/login", (req, res) => {
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+        return res.json({ success: false, message: "Email and password required" });
+    }
+
+    db.query("SELECT * FROM users WHERE email = ?", [email], (err, results) => {
+        if (err) {
+            console.error('Login error:', err);
+            return res.json({ success: false, message: "Database error" });
+        }
+        
+        if (results.length === 0) {
+            return res.json({ success: false, message: "User not found" });
+        }
+
+        const user = results[0];
+
+        // Compare password
+        if (bcrypt.compareSync(password, user.password)) {
+            // Remove password from response
+            delete user.password;
+            
+            // Get followers and following
+            db.query(`
+                SELECT 
+                    (SELECT JSON_OBJECTAGG(follower_uid, TRUE) 
+                     FROM user_followers 
+                     WHERE following_uid = ? AND status = 'accepted') as followers,
+                    (SELECT JSON_OBJECTAGG(following_uid, TRUE) 
+                     FROM user_followers 
+                     WHERE follower_uid = ? AND status = 'accepted') as following,
+                    (SELECT JSON_OBJECTAGG(follower_uid, TRUE) 
+                     FROM user_followers 
+                     WHERE following_uid = ? AND status = 'pending') as receivedRequests,
+                    (SELECT JSON_OBJECTAGG(following_uid, TRUE) 
+                     FROM user_followers 
+                     WHERE follower_uid = ? AND status = 'pending') as sentRequests
+            `, [user.uid, user.uid, user.uid, user.uid], (err, relationResults) => {
+                if (!err && relationResults.length > 0) {
+                    user.followers = relationResults[0].followers || {};
+                    user.following = relationResults[0].following || {};
+                    user.receivedRequests = relationResults[0].receivedRequests || {};
+                    user.sentRequests = relationResults[0].sentRequests || {};
+                }
+                
+                res.json({ success: true, message: "Login successful", user });
+            });
+        } else {
+            res.json({ success: false, message: "Invalid password" });
+        }
+    });
+});
+
+// Register endpoint
 app.post("/register", async (req, res) => {
     const { uid, username, email, password } = req.body;
-    if (!uid || !username || !email || !password)
+    
+    if (!uid || !username || !email || !password) {
         return res.json({ success: false, message: "All fields required" });
+    }
 
-    const hashed = await bcrypt.hash(password, 10);
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const username_lower = username.toLowerCase();
+
+        db.query(
+            "INSERT INTO users (uid, username, username_lower, email, password) VALUES (?, ?, ?, ?, ?)",
+            [uid, username, username_lower, email, hashedPassword],
+            (err) => {
+                if (err) {
+                    if (err.code === 'ER_DUP_ENTRY') {
+                        return res.json({ success: false, message: "Username or email already exists" });
+                    }
+                    console.error('Registration error:', err);
+                    return res.json({ success: false, message: "Registration failed" });
+                }
+
+                // Create user presence entry
+                db.query(
+                    "INSERT INTO user_presence (uid, status, lastSeen) VALUES (?, 'offline', ?)",
+                    [uid, Date.now()],
+                    (err) => {
+                        if (err) console.error('Error creating user presence:', err);
+                    }
+                );
+
+                res.json({ success: true, message: "Registration successful", uid });
+            }
+        );
+    } catch (error) {
+        console.error('Registration error:', error);
+        res.json({ success: false, message: "Server error" });
+    }
+});
+
+// ============================================
+// USER OPERATIONS
+// ============================================
+
+// Get user by UID
+app.get("/user/:uid", (req, res) => {
+    const { uid } = req.params;
+
+    db.query("SELECT * FROM users WHERE uid = ?", [uid], (err, results) => {
+        if (err) return res.json({ success: false, message: err.message });
+        if (results.length === 0) return res.json({ success: false, message: "User not found" });
+
+        const user = results[0];
+        delete user.password;
+
+        res.json({ success: true, user });
+    });
+});
+
+// Update user profile
+app.put("/user/:uid", (req, res) => {
+    const { uid } = req.params;
+    const { name, lastname, bio, website, dob, profilePicture, profileImage } = req.body;
 
     db.query(
-        "INSERT INTO users (uid, username, username_lower, email, password) VALUES (?, ?, ?, ?, ?)",
-        [uid, username, username.toLowerCase(), email, hashed],
-        (err) => {
-            if (err) {
-                if (err.code === "ER_DUP_ENTRY")
-                    return res.json({ success: false, message: "User already exists" });
-                return res.json({ success: false, message: "DB error: " + err.message });
-            }
-
-            db.query(
-                "INSERT INTO user_presence (uid, status, lastSeen) VALUES (?, 'offline', ?)",
-                [uid, Date.now()]
-            );
-
-            res.json({ success: true, message: "Registration successful", uid });
+        `UPDATE users SET name = ?, lastname = ?, bio = ?, website = ?, dob = ?, 
+         profilePicture = ?, profileImage = ? WHERE uid = ?`,
+        [name, lastname, bio, website, dob, profilePicture, profileImage, uid],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, message: "Profile updated successfully" });
         }
     );
 });
 
-// LOGIN
-app.post("/login", (req, res) => {
-    const { email, password } = req.body;
-    if (!email || !password)
-        return res.json({ success: false, message: "Email and password required" });
+// ============================================
+// POSTS
+// ============================================
 
-    db.query("SELECT * FROM users WHERE email = ?", [email], (err, results) => {
-        if (err) return res.json({ success: false, message: "DB error: " + err.message });
-        if (results.length === 0) return res.json({ success: false, message: "User not found" });
+// Create post
+app.post("/posts", (req, res) => {
+    const { postId, userId, caption, location, imageUrls, timestamp } = req.body;
 
-        const user = results[0];
-        if (!bcrypt.compareSync(password, user.password))
-            return res.json({ success: false, message: "Invalid password" });
+    db.query(
+        "INSERT INTO posts (postId, userId, caption, location, timestamp) VALUES (?, ?, ?, ?, ?)",
+        [postId, userId, caption, location, timestamp],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
 
-        delete user.password;
-        res.json({ success: true, message: "Login successful", user });
-    });
+            // Insert images if any
+            if (imageUrls && imageUrls.length > 0) {
+                const imageValues = imageUrls.map((url, index) => [postId, url, index]);
+                db.query(
+                    "INSERT INTO post_images (postId, imageUrl, orderIndex) VALUES ?",
+                    [imageValues],
+                    (err) => {
+                        if (err) console.error('Error inserting images:', err);
+                    }
+                );
+            }
+
+            // Update user post count
+            db.query("UPDATE users SET postCount = postCount + 1 WHERE uid = ?", [userId]);
+
+            res.json({ success: true, message: "Post created successfully" });
+        }
+    );
+});
+
+// Get posts by user
+app.get("/posts/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT p.*, GROUP_CONCAT(pi.imageUrl ORDER BY pi.orderIndex) as imageUrls
+         FROM posts p
+         LEFT JOIN post_images pi ON p.postId = pi.postId
+         WHERE p.userId = ?
+         GROUP BY p.postId
+         ORDER BY p.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            const posts = results.map(post => ({
+                ...post,
+                imageUrls: post.imageUrls ? post.imageUrls.split(',') : []
+            }));
+
+            res.json({ success: true, posts });
+        }
+    );
+});
+
+// ============================================
+// MESSAGES
+// ============================================
+
+// Send message
+app.post("/messages", (req, res) => {
+    const { messageId, senderId, receiverId, messageText, timestamp } = req.body;
+
+    db.query(
+        "INSERT INTO messages (messageId, senderId, receiverId, messageText, timestamp) VALUES (?, ?, ?, ?, ?)",
+        [messageId, senderId, receiverId, messageText, timestamp],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            // Update conversation
+            db.query(
+                `INSERT INTO conversations (user1_uid, user2_uid, lastMessage, timestamp) 
+                 VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE lastMessage = ?, timestamp = ?`,
+                [senderId, receiverId, messageText, timestamp, messageText, timestamp]
+            );
+
+            res.json({ success: true, message: "Message sent successfully" });
+        }
+    );
+});
+
+// Get messages between two users
+app.get("/messages/:user1/:user2", (req, res) => {
+    const { user1, user2 } = req.params;
+
+    db.query(
+        `SELECT * FROM messages 
+         WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)
+         ORDER BY timestamp ASC`,
+        [user1, user2, user2, user1],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, messages: results });
+        }
+    );
+});
+
+// ============================================
+// FOLLOWERS
+// ============================================
+
+// Follow user
+app.post("/follow", (req, res) => {
+    const { follower_uid, following_uid } = req.body;
+
+    db.query(
+        "INSERT INTO user_followers (follower_uid, following_uid, status) VALUES (?, ?, 'accepted')",
+        [follower_uid, following_uid],
+        (err) => {
+            if (err) {
+                if (err.code === 'ER_DUP_ENTRY') {
+                    return res.json({ success: false, message: "Already following" });
+                }
+                return res.json({ success: false, message: err.message });
+            }
+
+            // Update counts
+            db.query("UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?", [follower_uid]);
+            db.query("UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?", [following_uid]);
+
+            res.json({ success: true, message: "Followed successfully" });
+        }
+    );
+});
+
+// Unfollow user
+app.delete("/follow/:follower_uid/:following_uid", (req, res) => {
+    const { follower_uid, following_uid } = req.params;
+
+    db.query(
+        "DELETE FROM user_followers WHERE follower_uid = ? AND following_uid = ?",
+        [follower_uid, following_uid],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.affectedRows > 0) {
+                // Update counts
+                db.query("UPDATE users SET followingCount = followingCount - 1 WHERE uid = ?", [follower_uid]);
+                db.query("UPDATE users SET followersCount = followersCount - 1 WHERE uid = ?", [following_uid]);
+
+                res.json({ success: true, message: "Unfollowed successfully" });
+            } else {
+                res.json({ success: false, message: "Not following" });
+            }
+        }
+    );
 });
 
 // ============================================
@@ -183,6 +334,8 @@ app.post("/login", (req, res) => {
 // ============================================
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✓ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`✓ Server running on port ${PORT}`);
+});
 
 module.exports = { db };
