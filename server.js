@@ -56,6 +56,33 @@ if (password === user.password) {
     });
 });
 
+app.post("/register", (req, res) => {
+    const { username, name, lastname, email, password, dob, profileImage } = req.body;
+
+    if (!username || !name || !lastname || !email || !password) {
+        return res.json({ success: false, message: "Required fields missing" });
+    }
+
+    db.query(
+        "SELECT * FROM users WHERE email = ? OR username = ?",
+        [email, username],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: "Database error" });
+            if (results.length > 0) return res.json({ success: false, message: "User exists" });
+
+            db.query(
+                `INSERT INTO users (username, username_lower, name, lastname, email, password, dob, profileImage, followersCount, followingCount, postCount, bio, website, profilePicture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, '', '', '')`,
+                [username, username.toLowerCase(), name, lastname, email, password, dob, profileImage],
+                (err, result) => {
+                    if (err) return res.json({ success: false, message: "Database error" });
+                    res.json({ success: true, message: "Registration successful", userId: result.insertId });
+                }
+            );
+        }
+    );
+});
+
+
 // Use PORT from Railway or default 8080
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
@@ -65,63 +92,4 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 
 
-// Register endpoint
-app.post("/register", (req, res) => {
-    const { username, name, lastname, email, password } = req.body;
-
-    if (!username || !name || !lastname || !email || !password) {
-        return res.json({ success: false, message: "All required fields must be filled" });
-    }
-
-    // Check if email or username already exists
-    db.query(
-        "SELECT * FROM users WHERE email = ? OR username = ?",
-        [email, username],
-        (err, results) => {
-            if (err) {
-                console.error("Register SQL error:", err);
-                return res.json({ success: false, message: "Database error" });
-            }
-
-            if (results.length > 0) {
-                return res.json({ success: false, message: "Email or username already exists" });
-            }
-
-            // Insert new user
-            db.query(
-                `INSERT INTO users 
-                (username, username_lower, name, lastname, bio, website, email, dob, profilePicture, profileImage, followersCount, followingCount, postCount, password)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    username,
-                    username.toLowerCase(),
-                    name,
-                    lastname,
-                    "", // bio
-                    "", // website
-                    email,
-                    null, // dob
-                    "", // profilePicture
-                    "", // profileImage
-                    0, // followersCount
-                    0, // followingCount
-                    0, // postCount
-                    password // store as plain text for now
-                ],
-                (err, result) => {
-                    if (err) {
-                        console.error("Insert user error:", err);
-                        return res.json({ success: false, message: "Database error" });
-                    }
-
-                    return res.json({
-                        success: true,
-                        message: "Registration successful",
-                        userId: result.insertId
-                    });
-                }
-            );
-        }
-    );
-});
 
