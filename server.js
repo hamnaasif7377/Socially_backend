@@ -65,20 +65,29 @@ app.post("/login", (req, res) => {
     }
 
     db.query("SELECT * FROM users WHERE email = ?", [email], (err, results) => {
-        if (err) return res.json({ success: false, message: "Database error" });
-        if (results.length === 0) return res.json({ success: false, message: "User not found" });
+        if (err) {
+            console.error('Login error:', err);
+            return res.json({ success: false, message: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.json({ success: false, message: "User not found" });
+        }
 
         const user = results[0];
 
-        if (password.trim() === user.password.trim()) {
-    const { password, ...userData } = user;
-    res.json({ success: true, message: "Login successful", user: userData });
-} else {
-    res.json({ success: false, message: "Invalid password" });
-}
+        // Convert password to string in case it's not
+        const userPassword = user.password ? String(user.password) : "";
 
+        if (password === userPassword) {
+            const { password, ...userData } = user; // remove password from response
+            return res.json({ success: true, message: "Login successful", user: userData });
+        } else {
+            return res.json({ success: false, message: "Invalid password" });
+        }
     });
 });
+
 
 // ---- GLOBAL ERROR HANDLING ----
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
