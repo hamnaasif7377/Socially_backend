@@ -63,39 +63,6 @@ app.post("/login", (req, res) => {
 
         const user = results[0];
 
-        // Compare password
-        if (bcrypt.compareSync(password, user.password)) {
-            // Remove password from response
-            delete user.password;
-            
-            // Get followers and following
-            db.query(`
-                SELECT 
-                    (SELECT JSON_OBJECTAGG(follower_uid, TRUE) 
-                     FROM user_followers 
-                     WHERE following_uid = ? AND status = 'accepted') as followers,
-                    (SELECT JSON_OBJECTAGG(following_uid, TRUE) 
-                     FROM user_followers 
-                     WHERE follower_uid = ? AND status = 'accepted') as following,
-                    (SELECT JSON_OBJECTAGG(follower_uid, TRUE) 
-                     FROM user_followers 
-                     WHERE following_uid = ? AND status = 'pending') as receivedRequests,
-                    (SELECT JSON_OBJECTAGG(following_uid, TRUE) 
-                     FROM user_followers 
-                     WHERE follower_uid = ? AND status = 'pending') as sentRequests
-            `, [user.uid, user.uid, user.uid, user.uid], (err, relationResults) => {
-                if (!err && relationResults.length > 0) {
-                    user.followers = relationResults[0].followers || {};
-                    user.following = relationResults[0].following || {};
-                    user.receivedRequests = relationResults[0].receivedRequests || {};
-                    user.sentRequests = relationResults[0].sentRequests || {};
-                }
-                
-                res.json({ success: true, message: "Login successful", user });
-            });
-        } else {
-            res.json({ success: false, message: "Invalid password" });
-        }
     });
 });
 
