@@ -59,12 +59,12 @@ if (password === user.password) {
 app.post("/register", (req, res) => {
     const { username, name, lastname, email, password, dob, profileImage } = req.body;
 
-    // Validate required fields
+    // 1. Validate required fields
     if (!username || !name || !lastname || !email || !password) {
-        return res.json({ success: false, message: "Required fields missing" });
+        return res.json({ success: false, message: "Please fill all required fields" });
     }
 
-    // Check if user already exists
+    // 2. Check if email or username already exists
     db.query(
         "SELECT * FROM users WHERE email = ? OR username = ?",
         [email, username],
@@ -78,28 +78,27 @@ app.post("/register", (req, res) => {
                 return res.json({ success: false, message: "Email or username already exists" });
             }
 
-            // Insert new user
+            // 3. Insert new user without hashing
             const insertQuery = `
                 INSERT INTO users 
                 (username, username_lower, name, lastname, bio, website, email, dob, profilePicture, profileImage, followersCount, followingCount, postCount, password) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
-
             const insertValues = [
                 username,
                 username.toLowerCase(),
                 name,
                 lastname,
-                "",               // bio default
-                "",               // website default
+                "",                  // bio
+                "",                  // website
                 email,
-                dob || null,      // dob optional
-                "",               // profilePicture default
-                profileImage || "", // profileImage optional
-                0,                // followersCount default
-                0,                // followingCount default
-                0,                // postCount default
-                password
+                dob || null,         // dob optional
+                "",                  // profilePicture
+                profileImage || "",  // profileImage optional
+                0,                   // followersCount
+                0,                   // followingCount
+                0,                   // postCount
+                password             // store plain password
             ];
 
             db.query(insertQuery, insertValues, (err, result) => {
@@ -110,13 +109,14 @@ app.post("/register", (req, res) => {
 
                 res.json({
                     success: true,
-                    message: "Registration successful",
+                    message: "Account created successfully!",
                     userId: result.insertId
                 });
             });
         }
     );
 });
+
 
 
 // Use PORT from Railway or default 8080
