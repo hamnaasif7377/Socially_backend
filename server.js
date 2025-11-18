@@ -51,7 +51,7 @@ app.post("/login", (req, res) => {
         return res.json({ success: false, message: "Email and password required" });
     }
 
-    db.query("SELECT * FROM users WHERE email = ?", [email], (err, results) => {
+    db.query("SELECT * FROM test_users WHERE email = ?", [email], (err, results) => {
         if (err) {
             console.error('Login error:', err);
             return res.json({ success: false, message: "Database error" });
