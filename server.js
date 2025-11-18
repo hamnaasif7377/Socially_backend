@@ -3,7 +3,6 @@ require('dotenv').config(); // Load .env variables
 const express = require('express');
 const mysql = require('mysql2');
 const bcrypt = require('bcrypt');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 app.use(express.json());
@@ -57,7 +56,6 @@ if (password === user.password) {
     });
 });
 
-
 app.post("/register", (req, res) => {
     const { username, name, lastname, email, password, dob, profileImage } = req.body;
 
@@ -80,17 +78,13 @@ app.post("/register", (req, res) => {
                 return res.json({ success: false, message: "Email or username already exists" });
             }
 
-            // 3. Generate UID
-            const uid = uuidv4();
-
-            // 4. Insert new user
+            // 3. Insert new user without hashing
             const insertQuery = `
                 INSERT INTO users 
-                (uid, username, username_lower, name, lastname, bio, website, email, dob, profilePicture, profileImage, followersCount, followingCount, postCount, password) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (username, username_lower, name, lastname, bio, website, email, dob, profilePicture, profileImage, followersCount, followingCount, postCount, password) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const insertValues = [
-                uid,
                 username,
                 username.toLowerCase(),
                 name,
@@ -116,12 +110,13 @@ app.post("/register", (req, res) => {
                 res.json({
                     success: true,
                     message: "Account created successfully!",
-                    userId: uid
+                    userId: result.insertId
                 });
             });
         }
     );
 });
+
 
 
 // Use PORT from Railway or default 8080
