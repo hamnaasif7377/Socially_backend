@@ -5,6 +5,20 @@ const mysql = require('mysql2');
 const app = express();
 app.use(express.json({ limit: '50mb' })); // Increased limit for Base64 images
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+const session = require('express-session'); 
+
+// ---- SESSION MANAGEMENT ----
+app.use(
+    session({
+        secret: "supersecretkey123", // change later if needed
+        resave: false,
+        saveUninitialized: true,
+        cookie: {
+            maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days session
+        }
+    })
+);
+
 
 // ---- DATABASE CONNECTION ----
 const db = mysql.createConnection({
@@ -99,6 +113,36 @@ app.post("/login", (req, res) => {
         } else {
             return res.json({ success: false, message: "Invalid password" });
         }
+    });
+});
+
+// ---- CHECK SESSION (ANDROID WILL CALL THIS ON APP OPEN) ----
+app.get("/session", (req, res) => {
+    if (!req.session.userId) {
+        return res.json({ loggedIn: false });
+    }
+
+    db.query(
+        "SELECT * FROM users WHERE uid = ?",
+        [req.session.userId],
+        (err, results) => {
+            if (err || results.length === 0)
+                return res.json({ loggedIn: false });
+
+            const user = results[0];
+            delete user.password;
+
+            res.json({ loggedIn: true, user });
+        }
+    );
+});
+
+
+
+// ---- LOGOUT ----
+app.post("/logout", (req, res) => {
+    req.session.destroy(() => {
+        res.json({ success: true, message: "Logged out" });
     });
 });
 
