@@ -314,50 +314,51 @@ app.post("/posts/upload", (req, res) => {
 
 // GET - Retrieve all posts with pagination
 app.get("/posts/all", (req, res) => {
-    // Read limit and offset from query params, default to 50 posts per request
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
 
-    db.query(
-        `SELECT * FROM posts ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
-        [limit, offset],
-        (err, results) => {
-            if (err) {
-                console.error("Error fetching posts:", err);
-                return res.json({ success: false, message: err.message });
+    // Only select necessary columns
+    const query = `
+        SELECT postId, userId, username, profileImage, images, caption, location, timestamp, likesCount, commentsCount
+        FROM posts
+        ORDER BY timestamp DESC
+        LIMIT ? OFFSET ?`;
+
+    db.query(query, [limit, offset], (err, results) => {
+        if (err) {
+            console.error("Error fetching posts:", err);
+            return res.json({ success: false, message: err.message });
+        }
+
+        const posts = results.map(post => {
+            let images = [];
+            if (Array.isArray(post.images)) {
+                images = post.images;
+            } else if (typeof post.images === 'string') {
+                try {
+                    images = JSON.parse(post.images);
+                } catch (e) {
+                    images = [post.images];
+                }
             }
 
-            const posts = results.map(post => {
-                let images = [];
-                
-                if (Array.isArray(post.images)) {
-                    images = post.images;
-                } else if (typeof post.images === 'string') {
-                    try {
-                        images = JSON.parse(post.images);
-                    } catch (e) {
-                        images = [post.images];
-                    }
-                }
+            return {
+                postId: post.postId,
+                userId: post.userId,
+                username: post.username,
+                profileImage: post.profileImage || "",
+                images: images,
+                caption: post.caption || "",
+                location: post.location || "",
+                timestamp: post.timestamp,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0
+            };
+        });
 
-                return {
-                    postId: post.postId,
-                    userId: post.userId,
-                    username: post.username,
-                    profileImage: post.profileImage || "",
-                    images: images,
-                    caption: post.caption || "",
-                    location: post.location || "",
-                    timestamp: post.timestamp,
-                    likesCount: post.likesCount || 0,
-                    commentsCount: post.commentsCount || 0
-                };
-            });
-
-            console.log(`✅ Fetched ${posts.length} posts (limit: ${limit}, offset: ${offset})`);
-            res.json({ success: true, posts, limit, offset });
-        }
-    );
+        console.log(`✅ Fetched ${posts.length} posts (limit: ${limit}, offset: ${offset})`);
+        res.json({ success: true, posts, limit, offset });
+    });
 });
 
 
