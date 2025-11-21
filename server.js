@@ -236,19 +236,51 @@ app.get("/users/:userId", (req, res) => {
     );
 });
 
+// Drop posts table if exists
+db.query("DROP TABLE IF EXISTS posts", (err, result) => {
+    if (err) console.error("Error dropping posts table:", err);
+    else console.log("Posts table dropped (if existed)");
+});
+
+// Drop comments table if exists
+db.query("DROP TABLE IF EXISTS comments", (err, result) => {
+    if (err) console.error("Error dropping comments table:", err);
+    else console.log("Comments table dropped (if existed)");
+});
+
+const createPostsTable = `
+CREATE TABLE posts (
+    postId VARCHAR(255) PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    profileImage TEXT,
+    caption TEXT,
+    location VARCHAR(255),
+    timestamp BIGINT NOT NULL,
+    images JSON,
+    likesCount INT DEFAULT 0,
+    commentsCount INT DEFAULT 0
+)`;
+
+db.query(createPostsTable, (err, result) => {
+    if (err) console.error("Error creating posts table:", err);
+    else console.log("Posts table created successfully");
+});
+
 
 // ---------- POST UPLOAD
 app.post("/posts/upload", (req, res) => {
-    const { postId, userId, imageBase64, caption, location, timestamp } = req.body;
+    const { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
 
-    if (!postId || !userId || !imageBase64) {
+    if (!postId || !userId || !images || !username) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
     db.query(
-        `INSERT INTO posts (postId, userId, imageBase64, caption, location, timestamp)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [postId, userId, JSON.stringify(imageBase64), caption || "", location || "", timestamp],
+        `INSERT INTO posts 
+        (postId, userId, username, profileImage, images, caption, location, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [postId, userId, username, profileImage, JSON.stringify(images), caption || "", location || "", timestamp],
         (err) => {
             if (err) {
                 console.error("Post upload error:", err);
@@ -258,6 +290,7 @@ app.post("/posts/upload", (req, res) => {
         }
     );
 });
+
 
 
 // GLOBAL ERROR HANDLING
