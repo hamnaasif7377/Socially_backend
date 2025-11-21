@@ -132,7 +132,9 @@ app.post("/logout", (req, res) => {
     });
 });
 
-// ---------- STORY
+// ======================================================
+// ---------- STORY ENDPOINTS
+// ======================================================
 app.post("/stories/upload", (req, res) => {
     const { storyId, userId, userName, userProfileImage, imageBase64, viewType, timestamp, expiryTime } = req.body;
 
@@ -236,7 +238,11 @@ app.get("/users/:userId", (req, res) => {
     );
 });
 
+// ======================================================
+// ---------- POST ENDPOINTS
+// ======================================================
 
+// Create posts table
 const createPostsTable = `
 CREATE TABLE IF NOT EXISTS posts (
     postId VARCHAR(255) PRIMARY KEY,
@@ -253,12 +259,10 @@ CREATE TABLE IF NOT EXISTS posts (
 
 db.query(createPostsTable, (err, result) => {
     if (err) console.error("Error creating posts table:", err);
-    else console.log("Posts table created successfully");
+    else console.log("✅ Posts table ready");
 });
 
-
-
-// ---------- POST UPLOAD
+// POST - Upload a post
 app.post("/posts/upload", (req, res) => {
     let { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
 
@@ -283,18 +287,77 @@ app.post("/posts/upload", (req, res) => {
                 console.error("Post upload error:", err);
                 return res.json({ success: false, message: err.message });
             }
+            console.log(`✅ Post uploaded: ${postId} by ${username}`);
             res.json({ success: true, message: "Post uploaded successfully", postId });
         }
     );
 });
 
+// GET - Retrieve all posts
+app.get("/posts/all", (req, res) => {
+    db.query(
+        `SELECT * FROM posts ORDER BY timestamp DESC`,
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching posts:", err);
+                return res.json({ success: false, message: err.message });
+            }
 
+            // Parse the JSON images field for each post
+            const posts = results.map(post => ({
+                postId: post.postId,
+                userId: post.userId,
+                username: post.username,
+                profileImage: post.profileImage || "",
+                images: JSON.parse(post.images), // Convert JSON string back to array
+                caption: post.caption || "",
+                location: post.location || "",
+                timestamp: post.timestamp,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0
+            }));
 
+            console.log(`✅ Fetched ${posts.length} posts`);
+            res.json({ success: true, posts });
+        }
+    );
+});
+
+// GET - Retrieve posts by specific user
+app.get("/posts/user/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT * FROM posts WHERE userId = ? ORDER BY timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching user posts:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            const posts = results.map(post => ({
+                postId: post.postId,
+                userId: post.userId,
+                username: post.username,
+                profileImage: post.profileImage || "",
+                images: JSON.parse(post.images),
+                caption: post.caption || "",
+                location: post.location || "",
+                timestamp: post.timestamp,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0
+            }));
+
+            res.json({ success: true, posts });
+        }
+    );
+});
 
 // GLOBAL ERROR HANDLING
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
 
 app.listen(process.env.PORT || 3000, () => {
-    console.log("Server running on port " + (process.env.PORT || 3000));
+    console.log(`🚀 Server running on port ${process.env.PORT || 3000}`);
 });
