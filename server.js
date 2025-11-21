@@ -262,6 +262,25 @@ db.query(createPostsTable, (err, result) => {
     else console.log("✅ Posts table ready");
 });
 
+// Ensure index exists on timestamp for sorting
+const createIndexQuery = `
+    ALTER TABLE posts
+    ADD INDEX idx_posts_timestamp (timestamp DESC)
+`;
+
+db.query(createIndexQuery, (err) => {
+    if (err) {
+        if (err.code === 'ER_DUP_KEYNAME') {
+            console.log("✅ Index idx_posts_timestamp already exists");
+        } else {
+            console.error("❌ Error creating index:", err);
+        }
+    } else {
+        console.log("✅ Index idx_posts_timestamp created");
+    }
+});
+
+
 // POST - Upload a post
 app.post("/posts/upload", (req, res) => {
     let { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
