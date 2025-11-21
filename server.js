@@ -132,7 +132,7 @@ app.post("/logout", (req, res) => {
     });
 });
 
-// ---------- STORY ROUTES (UNCHANGED) ----------
+// ---------- STORY
 app.post("/stories/upload", (req, res) => {
     const { storyId, userId, userName, userProfileImage, imageBase64, viewType, timestamp, expiryTime } = req.body;
 
@@ -235,6 +235,30 @@ app.get("/users/:userId", (req, res) => {
         }
     );
 });
+
+
+// ---------- POST UPLOAD
+app.post("/posts/upload", (req, res) => {
+    const { postId, userId, imageBase64, caption, location, timestamp } = req.body;
+
+    if (!postId || !userId || !imageBase64) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        `INSERT INTO posts (postId, userId, imageBase64, caption, location, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [postId, userId, JSON.stringify(imageBase64), caption || "", location || "", timestamp],
+        (err) => {
+            if (err) {
+                console.error("Post upload error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+            res.json({ success: true, message: "Post uploaded successfully", postId });
+        }
+    );
+});
+
 
 // GLOBAL ERROR HANDLING
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
