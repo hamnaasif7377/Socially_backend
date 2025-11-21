@@ -236,17 +236,6 @@ app.get("/users/:userId", (req, res) => {
     );
 });
 
-// Drop posts table if exists
-db.query("DROP TABLE IF EXISTS posts", (err, result) => {
-    if (err) console.error("Error dropping posts table:", err);
-    else console.log("Posts table dropped (if existed)");
-});
-
-// Drop comments table if exists
-db.query("DROP TABLE IF EXISTS comments", (err, result) => {
-    if (err) console.error("Error dropping comments table:", err);
-    else console.log("Comments table dropped (if existed)");
-});
 
 const createPostsTable = `
 CREATE TABLE IF NOT EXISTS posts (
