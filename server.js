@@ -303,19 +303,51 @@ app.get("/posts/all", (req, res) => {
                 return res.json({ success: false, message: err.message });
             }
 
+            // Debug: log what we're getting from DB
+            if (results.length > 0) {
+                console.log("First post images type:", typeof results[0].images);
+                console.log("First post images sample:", 
+                    typeof results[0].images === 'string' 
+                        ? results[0].images.substring(0, 50) 
+                        : results[0].images
+                );
+            }
+
             // Parse the JSON images field for each post
-            const posts = results.map(post => ({
-                postId: post.postId,
-                userId: post.userId,
-                username: post.username,
-                profileImage: post.profileImage || "",
-                images: JSON.parse(post.images), // Convert JSON string back to array
-                caption: post.caption || "",
-                location: post.location || "",
-                timestamp: post.timestamp,
-                likesCount: post.likesCount || 0,
-                commentsCount: post.commentsCount || 0
-            }));
+            const posts = results.map(post => {
+                let images = [];
+                
+                try {
+                    // Try to parse as JSON array first
+                    images = JSON.parse(post.images);
+                } catch (e) {
+                    // If parsing fails, it might be a single base64 string
+                    // or already an array (MySQL might auto-convert)
+                    if (typeof post.images === 'string') {
+                        // Single base64 string - wrap it in an array
+                        images = [post.images];
+                    } else if (Array.isArray(post.images)) {
+                        // Already an array
+                        images = post.images;
+                    } else {
+                        console.error("Unexpected images format:", typeof post.images);
+                        images = [];
+                    }
+                }
+
+                return {
+                    postId: post.postId,
+                    userId: post.userId,
+                    username: post.username,
+                    profileImage: post.profileImage || "",
+                    images: images,
+                    caption: post.caption || "",
+                    location: post.location || "",
+                    timestamp: post.timestamp,
+                    likesCount: post.likesCount || 0,
+                    commentsCount: post.commentsCount || 0
+                };
+            });
 
             console.log(`✅ Fetched ${posts.length} posts`);
             res.json({ success: true, posts });
@@ -336,18 +368,34 @@ app.get("/posts/user/:userId", (req, res) => {
                 return res.json({ success: false, message: err.message });
             }
 
-            const posts = results.map(post => ({
-                postId: post.postId,
-                userId: post.userId,
-                username: post.username,
-                profileImage: post.profileImage || "",
-                images: JSON.parse(post.images),
-                caption: post.caption || "",
-                location: post.location || "",
-                timestamp: post.timestamp,
-                likesCount: post.likesCount || 0,
-                commentsCount: post.commentsCount || 0
-            }));
+            const posts = results.map(post => {
+                let images = [];
+                
+                try {
+                    images = JSON.parse(post.images);
+                } catch (e) {
+                    if (typeof post.images === 'string') {
+                        images = [post.images];
+                    } else if (Array.isArray(post.images)) {
+                        images = post.images;
+                    } else {
+                        images = [];
+                    }
+                }
+
+                return {
+                    postId: post.postId,
+                    userId: post.userId,
+                    username: post.username,
+                    profileImage: post.profileImage || "",
+                    images: images,
+                    caption: post.caption || "",
+                    location: post.location || "",
+                    timestamp: post.timestamp,
+                    likesCount: post.likesCount || 0,
+                    commentsCount: post.commentsCount || 0
+                };
+            });
 
             res.json({ success: true, posts });
         }
