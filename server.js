@@ -260,17 +260,24 @@ db.query(createPostsTable, (err, result) => {
 
 // ---------- POST UPLOAD
 app.post("/posts/upload", (req, res) => {
-    const { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
+    let { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
 
-    if (!postId || !userId || !images || !username) {
+    if (!userId || !images || images.length === 0) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
+    if (!postId) {
+        postId = require('uuid').v4(); // generate unique ID
+    }
+
+    if (!timestamp) {
+        timestamp = Date.now();
+    }
+
     db.query(
-        `INSERT INTO posts 
-        (postId, userId, username, profileImage, images, caption, location, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [postId, userId, username, profileImage, JSON.stringify(images), caption || "", location || "", timestamp],
+        `INSERT INTO posts (postId, userId, username, profileImage, images, caption, location, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [postId, userId, username || "", profileImage || "", JSON.stringify(images), caption || "", location || "", timestamp],
         (err) => {
             if (err) {
                 console.error("Post upload error:", err);
@@ -280,6 +287,7 @@ app.post("/posts/upload", (req, res) => {
         }
     );
 });
+
 
 
 
