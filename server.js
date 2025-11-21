@@ -293,29 +293,30 @@ app.post("/posts/upload", (req, res) => {
     );
 });
 
-// GET - Retrieve all posts
+// GET - Retrieve all posts with pagination
 app.get("/posts/all", (req, res) => {
+    // Read limit and offset from query params, default to 50 posts per request
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+
     db.query(
-        `SELECT * FROM posts ORDER BY timestamp DESC`,
+        `SELECT * FROM posts ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+        [limit, offset],
         (err, results) => {
             if (err) {
                 console.error("Error fetching posts:", err);
                 return res.json({ success: false, message: err.message });
             }
 
-            // MySQL JSON type automatically parses to array/object
             const posts = results.map(post => {
                 let images = [];
                 
-                // Check if it's already an array (MySQL auto-parsed)
                 if (Array.isArray(post.images)) {
                     images = post.images;
                 } else if (typeof post.images === 'string') {
-                    // If it's still a string, try to parse it
                     try {
                         images = JSON.parse(post.images);
                     } catch (e) {
-                        // If parsing fails, wrap single string in array
                         images = [post.images];
                     }
                 }
@@ -334,11 +335,12 @@ app.get("/posts/all", (req, res) => {
                 };
             });
 
-            console.log(`✅ Fetched ${posts.length} posts`);
-            res.json({ success: true, posts });
+            console.log(`✅ Fetched ${posts.length} posts (limit: ${limit}, offset: ${offset})`);
+            res.json({ success: true, posts, limit, offset });
         }
     );
 });
+
 
 // GET - Retrieve posts by specific user
 app.get("/posts/user/:userId", (req, res) => {
