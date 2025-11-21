@@ -249,15 +249,15 @@ db.query("DROP TABLE IF EXISTS comments", (err, result) => {
 });
 
 const createPostsTable = `
-CREATE TABLE posts (
+CREATE TABLE IF NOT EXISTS posts (
     postId VARCHAR(255) PRIMARY KEY,
     userId VARCHAR(255) NOT NULL,
     username VARCHAR(255) NOT NULL,
     profileImage TEXT,
+    images JSON,
     caption TEXT,
     location VARCHAR(255),
     timestamp BIGINT NOT NULL,
-    images JSON,
     likesCount INT DEFAULT 0,
     commentsCount INT DEFAULT 0
 )`;
@@ -266,6 +266,7 @@ db.query(createPostsTable, (err, result) => {
     if (err) console.error("Error creating posts table:", err);
     else console.log("Posts table created successfully");
 });
+
 
 
 // ---------- POST UPLOAD
