@@ -2634,6 +2634,162 @@ app.get("/posts/feed/:userId", (req, res) => {
 
 console.log("✅ Likes & Comments endpoints added");
 
+
+// ======================================================
+// ADD THESE TO YOUR SERVER.JS
+// ======================================================
+
+// ======================================================
+// CREATE SCREENSHOT EVENTS TABLE
+// ======================================================
+
+const createScreenshotEventsTable = `
+CREATE TABLE IF NOT EXISTS screenshot_events (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    chatId VARCHAR(255) NOT NULL,
+    userId VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    INDEX idx_chatId (chatId),
+    INDEX idx_timestamp (timestamp DESC)
+)`;
+
+db.query(createScreenshotEventsTable, (err) => {
+    if (err) console.error("Error creating screenshot_events table:", err);
+    else console.log("✅ Screenshot events table ready");
+});
+
+// ======================================================
+// SCREENSHOT ENDPOINTS
+// ======================================================
+
+// POST - Record screenshot event
+app.post("/screenshots/record", (req, res) => {
+    const { chatId, userId, username, timestamp } = req.body;
+
+    console.log("📸 Screenshot detected:", { chatId, userId, username });
+
+    if (!chatId || !userId || !username) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    const actualTimestamp = timestamp || Date.now();
+
+    db.query(
+        `INSERT INTO screenshot_events (chatId, userId, username, timestamp)
+         VALUES (?, ?, ?, ?)`,
+        [chatId, userId, username, actualTimestamp],
+        (err) => {
+            if (err) {
+                console.error("Error recording screenshot:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Screenshot recorded: ${username} in chat ${chatId}`);
+
+            // Insert system message about screenshot
+            const messageId = `msg_screenshot_${Date.now()}`;
+            
+            db.query(
+                `INSERT INTO messages 
+                 (messageId, senderId, receiverId, chatId, messageText, timestamp, isSystemMessage, isVanishMode)
+                 VALUES (?, ?, ?, ?, ?, ?, TRUE, FALSE)`,
+                [
+                    messageId,
+                    userId,
+                    userId, // System messages have same sender/receiver
+                    chatId,
+                    `${username} took a screenshot`,
+                    actualTimestamp,
+                ],
+                (err) => {
+                    if (err) {
+                        console.error("Error creating system message:", err);
+                    } else {
+                        console.log(`✅ System message created for screenshot`);
+                    }
+                }
+            );
+
+            res.json({ 
+                success: true, 
+                message: "Screenshot recorded",
+                messageId: messageId
+            });
+        }
+    );
+});
+
+// GET - Get screenshot events for a chat
+app.get("/screenshots/:chatId", (req, res) => {
+    const { chatId } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+
+    db.query(
+        `SELECT * FROM screenshot_events 
+         WHERE chatId = ? 
+         ORDER BY timestamp DESC 
+         LIMIT ?`,
+        [chatId, limit],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching screenshots:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Found ${results.length} screenshot events for chat ${chatId}`);
+            res.json({ success: true, screenshots: results });
+        }
+    );
+});
+
+// GET - Get recent screenshots for user
+app.get("/screenshots/user/:userId", (req, res) => {
+    const { userId } = req.params;
+    const limit = parseInt(req.query.limit) || 20;
+
+    db.query(
+        `SELECT * FROM screenshot_events 
+         WHERE userId = ? 
+         ORDER BY timestamp DESC 
+         LIMIT ?`,
+        [userId, limit],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching user screenshots:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Found ${results.length} screenshots by user ${userId}`);
+            res.json({ success: true, screenshots: results });
+        }
+    );
+});
+
+// DELETE - Clear old screenshot events (older than 30 days)
+app.delete("/screenshots/cleanup", (req, res) => {
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+
+    db.query(
+        "DELETE FROM screenshot_events WHERE timestamp < ?",
+        [thirtyDaysAgo],
+        (err, result) => {
+            if (err) {
+                console.error("Error cleaning up screenshots:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Deleted ${result.affectedRows} old screenshot events`);
+            res.json({ 
+                success: true, 
+                message: `Deleted ${result.affectedRows} old screenshots` 
+            });
+        }
+    );
+});
+
+console.log("✅ Screenshot detection endpoints added");
+
 // ======================================================
 // GLOBAL ERROR HANDLING
 // ======================================================
