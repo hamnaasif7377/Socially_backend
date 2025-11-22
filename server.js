@@ -407,6 +407,240 @@ app.get("/posts/user/:userId", (req, res) => {
     );
 });
 
+// Add these endpoints to your existing server.js file
+
+// ======================================================
+// ---------- FOLLOWERS/FOLLOWING ENDPOINTS
+// ======================================================
+
+// Create followers table
+const createFollowersTable = `
+CREATE TABLE IF NOT EXISTS followers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    followerId VARCHAR(255) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    UNIQUE KEY unique_follow (userId, followerId),
+    INDEX idx_user (userId),
+    INDEX idx_follower (followerId)
+)`;
+
+db.query(createFollowersTable, (err) => {
+    if (err) console.error("Error creating followers table:", err);
+    else console.log("✅ Followers table ready");
+});
+
+// Follow a user
+app.post("/users/follow", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    if (currentUserId === targetUserId) {
+        return res.json({ success: false, message: "Cannot follow yourself" });
+    }
+
+    const timestamp = Date.now();
+
+    // Insert follow relationship
+    db.query(
+        "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
+        [targetUserId, currentUserId, timestamp],
+        (err) => {
+            if (err) {
+                if (err.code === 'ER_DUP_ENTRY') {
+                    return res.json({ success: false, message: "Already following" });
+                }
+                return res.json({ success: false, message: err.message });
+            }
+
+            // Update follower/following counts
+            db.query(
+                "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
+                [targetUserId]
+            );
+            db.query(
+                "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
+                [currentUserId]
+            );
+
+            res.json({ success: true, message: "User followed successfully" });
+        }
+    );
+});
+
+// Unfollow a user
+app.post("/users/unfollow", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "DELETE FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, result) => {
+            if (err) {
+                return res.json({ success: false, message: err.message });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.json({ success: false, message: "Not following this user" });
+            }
+
+            // Update follower/following counts
+            db.query(
+                "UPDATE users SET followersCount = GREATEST(followersCount - 1, 0) WHERE uid = ?",
+                [targetUserId]
+            );
+            db.query(
+                "UPDATE users SET followingCount = GREATEST(followingCount - 1, 0) WHERE uid = ?",
+                [currentUserId]
+            );
+
+            res.json({ success: true, message: "User unfollowed successfully" });
+        }
+    );
+});
+
+// Check if following
+app.post("/users/isFollowing", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, isFollowing: results.length > 0 });
+        }
+    );
+});
+
+// ======================================================
+// ---------- USER SEARCH ENDPOINT
+// ======================================================
+
+app.post("/users/search", (req, res) => {
+    const { currentUserId, query, filter } = req.body;
+
+    console.log(`🔍 Search request - User: ${currentUserId}, Query: "${query}", Filter: ${filter}`);
+
+    if (!currentUserId || !query) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    // Sanitize query for SQL LIKE pattern
+    const searchPattern = `${query.toLowerCase()}%`;
+
+    let sqlQuery;
+    let queryParams;
+
+    switch (filter) {
+        case "Followers":
+            // Search users who follow the current user
+            sqlQuery = `
+                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage, 
+                       u.bio, u.followersCount, u.followingCount, u.postCount
+                FROM users u
+                INNER JOIN followers f ON u.uid = f.followerId
+                WHERE f.userId = ?
+                AND u.uid != ?
+                AND u.username_lower LIKE ?
+                ORDER BY u.username
+                LIMIT 50`;
+            queryParams = [currentUserId, currentUserId, searchPattern];
+            break;
+
+        case "Following":
+            // Search users that current user follows
+            sqlQuery = `
+                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage,
+                       u.bio, u.followersCount, u.followingCount, u.postCount
+                FROM users u
+                INNER JOIN followers f ON u.uid = f.userId
+                WHERE f.followerId = ?
+                AND u.uid != ?
+                AND u.username_lower LIKE ?
+                ORDER BY u.username
+                LIMIT 50`;
+            queryParams = [currentUserId, currentUserId, searchPattern];
+            break;
+
+        case "All":
+        default:
+            // Search all users except current user
+            sqlQuery = `
+                SELECT uid, username, name, email, profileImage, bio,
+                       followersCount, followingCount, postCount
+                FROM users
+                WHERE uid != ?
+                AND username_lower LIKE ?
+                ORDER BY username
+                LIMIT 50`;
+            queryParams = [currentUserId, searchPattern];
+            break;
+    }
+
+    db.query(sqlQuery, queryParams, (err, results) => {
+        if (err) {
+            console.error("Search error:", err);
+            return res.json({ success: false, message: err.message });
+        }
+
+        console.log(`✅ Found ${results.length} users for query "${query}" with filter "${filter}"`);
+
+        res.json({
+            success: true,
+            users: results,
+            count: results.length
+        });
+    });
+});
+
+// Get followers list
+app.get("/users/:userId/followers", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
+         FROM users u
+         INNER JOIN followers f ON u.uid = f.followerId
+         WHERE f.userId = ?
+         ORDER BY f.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, followers: results });
+        }
+    );
+});
+
+// Get following list
+app.get("/users/:userId/following", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
+         FROM users u
+         INNER JOIN followers f ON u.uid = f.userId
+         WHERE f.followerId = ?
+         ORDER BY f.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, following: results });
+        }
+    );
+});
+
 // GLOBAL ERROR HANDLING
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
