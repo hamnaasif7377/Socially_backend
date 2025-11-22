@@ -1563,10 +1563,7 @@ app.put("/users/update", (req, res) => {
 // FIXED MESSAGING ENDPOINTS - Add to your server.js
 // ======================================================
 
-// DROP MESSAGES TABLE IF EXISTS
-db.query(`DROP TABLE IF EXISTS messages`, (err) => {
-    if (err) console.error("Error dropping messages table:", err);
-    else console.log("✅ Messages table dropped");
+
 
     // CREATE MESSAGES TABLE
     db.query(`
@@ -1590,12 +1587,9 @@ db.query(`DROP TABLE IF EXISTS messages`, (err) => {
         if (err) console.error("Error creating messages table:", err);
         else console.log("✅ Messages table ready");
     });
-});
 
-// DROP CONVERSATIONS TABLE IF EXISTS
-db.query(`DROP TABLE IF EXISTS conversations`, (err) => {
-    if (err) console.error("Error dropping conversations table:", err);
-    else console.log("✅ Conversations table dropped");
+
+
 
     // CREATE CONVERSATIONS TABLE
     db.query(`
@@ -1615,7 +1609,7 @@ db.query(`DROP TABLE IF EXISTS conversations`, (err) => {
         if (err) console.error("Error creating conversations table:", err);
         else console.log("✅ Conversations table ready");
     });
-});
+
 
 
 // ======================================================
