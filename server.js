@@ -1065,6 +1065,341 @@ app.get("/posts/user/:userId", (req, res) => {
     );
 });
 
+
+
+// Add this to your server.js after the other table creations
+
+// ======================================================
+// CREATE NOTIFICATIONS TABLE
+// ======================================================
+
+const createNotificationsTable = `
+CREATE TABLE IF NOT EXISTS notifications (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    fromUserId VARCHAR(255) NOT NULL,
+    fromUsername VARCHAR(255) NOT NULL,
+    fromProfileImage TEXT,
+    message TEXT NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    postImage TEXT,
+    timestamp BIGINT NOT NULL,
+    isRead BOOLEAN DEFAULT FALSE,
+    INDEX idx_user (userId),
+    INDEX idx_timestamp (timestamp DESC),
+    INDEX idx_read (isRead)
+)`;
+
+db.query(createNotificationsTable, (err) => {
+    if (err) console.error("Error creating notifications table:", err);
+    else console.log("✅ Notifications table ready");
+});
+
+// ======================================================
+// NOTIFICATION ENDPOINTS
+// ======================================================
+
+// Get notifications for a user
+app.get("/notifications/:userId", (req, res) => {
+    const { userId } = req.params;
+    const includeRead = req.query.includeRead === 'true';
+
+    let query = `
+        SELECT * FROM notifications 
+        WHERE userId = ?`;
+    
+    if (!includeRead) {
+        query += ` AND isRead = FALSE`;
+    }
+    
+    query += ` ORDER BY timestamp DESC LIMIT 50`;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error("Error fetching notifications:", err);
+            return res.json({ success: false, message: err.message });
+        }
+
+        console.log(`✅ Fetched ${results.length} notifications for user: ${userId}`);
+        res.json({ success: true, notifications: results });
+    });
+});
+
+// Create notification (called internally by other endpoints)
+function createNotification(userId, fromUserId, fromUsername, fromProfileImage, message, type, postImage = null) {
+    const timestamp = Date.now();
+    
+    db.query(
+        `INSERT INTO notifications (userId, fromUserId, fromUsername, fromProfileImage, message, type, postImage, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, fromUserId, fromUsername, fromProfileImage, message, type, postImage, timestamp],
+        (err) => {
+            if (err) {
+                console.error("Error creating notification:", err);
+            } else {
+                console.log(`✅ Notification created: ${type} from ${fromUsername} to ${userId}`);
+            }
+        }
+    );
+}
+
+// Mark notification as read
+app.post("/notifications/markRead", (req, res) => {
+    const { notificationId } = req.body;
+
+    if (!notificationId) {
+        return res.json({ success: false, message: "Missing notification ID" });
+    }
+
+    db.query(
+        "UPDATE notifications SET isRead = TRUE WHERE id = ?",
+        [notificationId],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, message: "Notification marked as read" });
+        }
+    );
+});
+
+// Mark all notifications as read for a user
+app.post("/notifications/markAllRead", (req, res) => {
+    const { userId } = req.body;
+
+    if (!userId) {
+        return res.json({ success: false, message: "Missing user ID" });
+    }
+
+    db.query(
+        "UPDATE notifications SET isRead = TRUE WHERE userId = ? AND isRead = FALSE",
+        [userId],
+        (err, result) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ 
+                success: true, 
+                message: `Marked ${result.affectedRows} notifications as read` 
+            });
+        }
+    );
+});
+
+// Delete notification
+app.delete("/notifications/:notificationId", (req, res) => {
+    const { notificationId } = req.params;
+
+    db.query(
+        "DELETE FROM notifications WHERE id = ?",
+        [notificationId],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, message: "Notification deleted" });
+        }
+    );
+});
+
+// ======================================================
+// UPDATE FOLLOW REQUEST ENDPOINTS TO CREATE NOTIFICATIONS
+// ======================================================
+
+// Modify the sendFollowRequest endpoint to create a notification
+app.post("/users/sendFollowRequest", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    if (currentUserId === targetUserId) {
+        return res.json({ success: false, message: "Cannot send request to yourself" });
+    }
+
+    const timestamp = Date.now();
+
+    // First check if already following
+    db.query(
+        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length > 0) {
+                return res.json({ success: false, message: "Already following" });
+            }
+
+            // Insert follow request
+            db.query(
+                "INSERT INTO follow_requests (senderId, receiverId, timestamp, status) VALUES (?, ?, ?, 'pending')",
+                [currentUserId, targetUserId, timestamp],
+                (err) => {
+                    if (err) {
+                        if (err.code === 'ER_DUP_ENTRY') {
+                            return res.json({ success: false, message: "Request already sent" });
+                        }
+                        return res.json({ success: false, message: err.message });
+                    }
+
+                    // Get sender info to create notification
+                    db.query(
+                        "SELECT username, profileImage FROM users WHERE uid = ?",
+                        [currentUserId],
+                        (err, userResults) => {
+                            if (err || userResults.length === 0) {
+                                console.log(`✅ Follow request sent (notification creation failed): ${currentUserId} → ${targetUserId}`);
+                                return res.json({ success: true, message: "Follow request sent successfully" });
+                            }
+
+                            const sender = userResults[0];
+                            
+                            // Create notification
+                            createNotification(
+                                targetUserId,
+                                currentUserId,
+                                sender.username,
+                                sender.profileImage || "",
+                                "sent you a follow request",
+                                "follow_request"
+                            );
+
+                            console.log(`✅ Follow request sent with notification: ${currentUserId} → ${targetUserId}`);
+                            res.json({ success: true, message: "Follow request sent successfully" });
+                        }
+                    );
+                }
+            );
+        }
+    );
+});
+
+// Modify acceptFollowRequest to remove the notification
+app.post("/users/acceptFollowRequest", (req, res) => {
+    const { currentUserId, requesterId } = req.body;
+
+    if (!currentUserId || !requesterId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "SELECT * FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [requesterId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length === 0) {
+                return res.json({ success: false, message: "No pending request found" });
+            }
+
+            const timestamp = Date.now();
+
+            db.query("START TRANSACTION", (err) => {
+                if (err) return res.json({ success: false, message: err.message });
+
+                // Add follower relationship
+                db.query(
+                    "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
+                    [currentUserId, requesterId, timestamp],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        // Update follower count
+                        db.query(
+                            "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
+                            [currentUserId],
+                            (err) => {
+                                if (err) {
+                                    db.query("ROLLBACK");
+                                    return res.json({ success: false, message: err.message });
+                                }
+
+                                // Update following count
+                                db.query(
+                                    "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
+                                    [requesterId],
+                                    (err) => {
+                                        if (err) {
+                                            db.query("ROLLBACK");
+                                            return res.json({ success: false, message: err.message });
+                                        }
+
+                                        // Update request status
+                                        db.query(
+                                            "UPDATE follow_requests SET status = 'accepted' WHERE senderId = ? AND receiverId = ?",
+                                            [requesterId, currentUserId],
+                                            (err) => {
+                                                if (err) {
+                                                    db.query("ROLLBACK");
+                                                    return res.json({ success: false, message: err.message });
+                                                }
+
+                                                // Delete notification
+                                                db.query(
+                                                    "DELETE FROM notifications WHERE userId = ? AND fromUserId = ? AND type = 'follow_request'",
+                                                    [currentUserId, requesterId],
+                                                    (err) => {
+                                                        if (err) {
+                                                            console.error("Error deleting notification:", err);
+                                                        }
+
+                                                        db.query("COMMIT", (err) => {
+                                                            if (err) {
+                                                                db.query("ROLLBACK");
+                                                                return res.json({ success: false, message: err.message });
+                                                            }
+
+                                                            console.log(`✅ Follow request accepted: ${requesterId} → ${currentUserId}`);
+                                                            res.json({ success: true, message: "Request accepted successfully" });
+                                                        });
+                                                    }
+                                                );
+                                            }
+                                        );
+                                    }
+                                );
+                            }
+                        );
+                    }
+                );
+            });
+        }
+    );
+});
+
+// Modify rejectFollowRequest to remove the notification
+app.post("/users/rejectFollowRequest", (req, res) => {
+    const { currentUserId, requesterId } = req.body;
+
+    if (!currentUserId || !requesterId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "UPDATE follow_requests SET status = 'rejected' WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [requesterId, currentUserId],
+        (err, result) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (result.affectedRows === 0) {
+                return res.json({ success: false, message: "No pending request found" });
+            }
+
+            // Delete notification
+            db.query(
+                "DELETE FROM notifications WHERE userId = ? AND fromUserId = ? AND type = 'follow_request'",
+                [currentUserId, requesterId],
+                (err) => {
+                    if (err) {
+                        console.error("Error deleting notification:", err);
+                    }
+
+                    console.log(`✅ Follow request rejected: ${requesterId} → ${currentUserId}`);
+                    res.json({ success: true, message: "Request rejected successfully" });
+                }
+            );
+        }
+    );
+});
+
 // ======================================================
 // GLOBAL ERROR HANDLING
 // ======================================================
