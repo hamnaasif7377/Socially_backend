@@ -1680,18 +1680,16 @@ app.get("/messages/:chatId", (req, res) => {
     console.log("📬 Get messages request for chatId:", chatId);
 
     db.query(
-        `SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC`,
-        [chatId],
-        (err, results) => {
-            if (err) {
-                console.error("❌ Get messages error:", err);
-                return res.json({ success: false, message: err.message });
-            }
+  `SELECT * FROM messages 
+   WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)
+   ORDER BY timestamp ASC`,
+  [userId, otherUserId, otherUserId, userId],
+  (err, results) => {
+      if (err) return res.json({ success: false, error: err.message });
+      res.json({ success: true, messages: results });
+  }
+);
 
-            console.log(`✅ Retrieved ${results.length} messages for chat ${chatId}`);
-            res.json({ success: true, messages: results });
-        }
-    );
 });
 
 // ======================================================
@@ -1934,23 +1932,6 @@ app.get("/users/search/:query", (req, res) => {
 });
 
 
-// Get all conversations for a user
-app.get("/conversations/:userId", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        `SELECT * FROM conversations WHERE userId = ? ORDER BY timestamp DESC`,
-        [userId],
-        (err, results) => {
-            if (err) {
-                console.error("Get conversations error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            res.json({ success: true, conversations: results });
-        }
-    );
-});
 
 
 
