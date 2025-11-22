@@ -1564,7 +1564,7 @@ db.query(`
 CREATE TABLE IF NOT EXISTS messages (
     messageId VARCHAR(255) PRIMARY KEY,
     senderId VARCHAR(255) NOT NULL,
-    receiverId VARCHAR(255) NOT NULL,
+    receiverUid VARCHAR(255) NOT NULL,
     chatId VARCHAR(255) NOT NULL,
     messageText TEXT,
     imageData LONGTEXT,
@@ -1576,7 +1576,7 @@ CREATE TABLE IF NOT EXISTS messages (
     INDEX idx_chatId (chatId),
     INDEX idx_timestamp (timestamp),
     INDEX idx_senderId (senderId),
-    INDEX idx_receiverId (receiverId)
+    INDEX idx_receiverUid (receiverUid)
 )`, (err) => {
     if (err) console.error("Error creating messages table:", err);
     else console.log("✅ Messages table ready");
@@ -1585,15 +1585,15 @@ CREATE TABLE IF NOT EXISTS messages (
 db.query(`
 CREATE TABLE IF NOT EXISTS conversations (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    userId VARCHAR(255) NOT NULL,
-    otherUserId VARCHAR(255) NOT NULL,
+    uid VARCHAR(255) NOT NULL,
+    otherUid VARCHAR(255) NOT NULL,
     otherUsername VARCHAR(255),
     otherUserImage LONGTEXT,
     lastMessage TEXT,
     timestamp BIGINT NOT NULL,
     unreadCount INT DEFAULT 0,
-    UNIQUE KEY unique_conversation (userId, otherUserId),
-    INDEX idx_userId (userId),
+    UNIQUE KEY unique_conversation (uid, otherUid),
+    INDEX idx_uid (uid),
     INDEX idx_timestamp (timestamp)
 )`, (err) => {
     if (err) console.error("Error creating conversations table:", err);
@@ -1602,25 +1602,25 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 // Send a message
 app.post("/messages/send", (req, res) => {
-    const { messageId, senderId, receiverId, messageText, imageData, timestamp, isSystemMessage } = req.body;
+    const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage } = req.body;
 
-    if (!senderId || !receiverId || (!messageText && !imageData)) {
+    if (!senderId || !receiverUid || (!messageText && !imageData)) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
-    const chatId = senderId < receiverId ? `${senderId}_${receiverId}` : `${receiverId}_${senderId}`;
+    const chatId = senderId < receiverUid ? `${senderId}_${receiverUid}` : `${receiverUid}_${senderId}`;
 
     db.query(
-        `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
+        `INSERT INTO messages (messageId, senderId, receiverUid, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
-        [messageId, senderId, receiverId, chatId, messageText || null, imageData || null, timestamp, isSystemMessage || false],
+        [messageId, senderId, receiverUid, chatId, messageText || null, imageData || null, timestamp, isSystemMessage || false],
         (err) => {
             if (err) {
                 console.error("Send message error:", err);
                 return res.json({ success: false, message: err.message });
             }
 
-            console.log(`✅ Message sent from ${senderId} to ${receiverId}`);
+            console.log(`✅ Message sent from ${senderId} to ${receiverUid}`);
             res.json({ success: true, message: "Message sent successfully", messageId, chatId });
         }
     );
@@ -1652,7 +1652,6 @@ app.put("/messages/edit", (req, res) => {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
-    // First check if message exists and is within 5 minutes
     db.query(
         "SELECT * FROM messages WHERE messageId = ? AND senderId = ?",
         [messageId, senderId],
@@ -1668,7 +1667,6 @@ app.put("/messages/edit", (req, res) => {
                 return res.json({ success: false, message: "Can't edit message after 5 minutes" });
             }
 
-            // Update message
             db.query(
                 "UPDATE messages SET messageText = ?, isEdited = TRUE WHERE messageId = ?",
                 [newText, messageId],
@@ -1694,7 +1692,6 @@ app.delete("/messages/delete", (req, res) => {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
-    // Check if message exists and is within 5 minutes
     db.query(
         "SELECT * FROM messages WHERE messageId = ? AND senderId = ?",
         [messageId, senderId],
@@ -1710,7 +1707,6 @@ app.delete("/messages/delete", (req, res) => {
                 return res.json({ success: false, message: "Can't delete message after 5 minutes" });
             }
 
-            // Delete message
             db.query(
                 "DELETE FROM messages WHERE messageId = ?",
                 [messageId],
@@ -1730,21 +1726,21 @@ app.delete("/messages/delete", (req, res) => {
 
 // Update or create conversation
 app.post("/conversations/update", (req, res) => {
-    const { userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp } = req.body;
+    const { uid, otherUid, otherUsername, otherUserImage, lastMessage, timestamp } = req.body;
 
-    if (!userId || !otherUserId) {
+    if (!uid || !otherUid) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
     db.query(
-        `INSERT INTO conversations (userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp, unreadCount)
+        `INSERT INTO conversations (uid, otherUid, otherUsername, otherUserImage, lastMessage, timestamp, unreadCount)
          VALUES (?, ?, ?, ?, ?, ?, 0)
          ON DUPLICATE KEY UPDATE 
          otherUsername = VALUES(otherUsername),
          otherUserImage = VALUES(otherUserImage),
          lastMessage = VALUES(lastMessage),
          timestamp = VALUES(timestamp)`,
-        [userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp],
+        [uid, otherUid, otherUsername, otherUserImage, lastMessage, timestamp],
         (err) => {
             if (err) {
                 console.error("Update conversation error:", err);
@@ -1757,12 +1753,12 @@ app.post("/conversations/update", (req, res) => {
 });
 
 // Get all conversations for a user
-app.get("/conversations/:userId", (req, res) => {
-    const { userId } = req.params;
+app.get("/conversations/:uid", (req, res) => {
+    const { uid } = req.params;
 
     db.query(
-        `SELECT * FROM conversations WHERE userId = ? ORDER BY timestamp DESC`,
-        [userId],
+        `SELECT * FROM conversations WHERE uid = ? ORDER BY timestamp DESC`,
+        [uid],
         (err, results) => {
             if (err) {
                 console.error("Get conversations error:", err);
@@ -1776,20 +1772,19 @@ app.get("/conversations/:userId", (req, res) => {
 
 // Mark messages as seen and activate vanish mode
 app.post("/messages/markSeen", (req, res) => {
-    const { chatId, userId } = req.body;
+    const { chatId, uid } = req.body;
 
-    if (!chatId || !userId) {
+    if (!chatId || !uid) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
     const seenAt = Date.now();
 
-    // Mark messages as seen and enable vanish mode for unseen messages
     db.query(
         `UPDATE messages 
          SET seenAt = ?, isVanishMode = TRUE 
-         WHERE chatId = ? AND receiverId = ? AND seenAt IS NULL`,
-        [seenAt, chatId, userId],
+         WHERE chatId = ? AND receiverUid = ? AND seenAt IS NULL`,
+        [seenAt, chatId, uid],
         (err, result) => {
             if (err) {
                 console.error("Mark seen error:", err);
@@ -1804,17 +1799,16 @@ app.post("/messages/markSeen", (req, res) => {
 
 // Delete vanished messages when chat is closed
 app.delete("/messages/deleteVanished", (req, res) => {
-    const { chatId, userId } = req.body;
+    const { chatId, uid } = req.body;
 
-    if (!chatId || !userId) {
+    if (!chatId || !uid) {
         return res.json({ success: false, message: "Missing required fields" });
     }
 
-    // Delete messages that are in vanish mode and have been seen
     db.query(
         `DELETE FROM messages 
-         WHERE chatId = ? AND receiverId = ? AND isVanishMode = TRUE AND seenAt IS NOT NULL`,
-        [chatId, userId],
+         WHERE chatId = ? AND receiverUid = ? AND isVanishMode = TRUE AND seenAt IS NOT NULL`,
+        [chatId, uid],
         (err, result) => {
             if (err) {
                 console.error("Delete vanished messages error:", err);
@@ -1827,30 +1821,6 @@ app.delete("/messages/deleteVanished", (req, res) => {
     );
 });
 
-// Search users for messaging
-app.get("/users/search/:query", (req, res) => {
-    const { query } = req.params;
-
-    if (!query || query.length < 2) {
-        return res.json({ success: false, message: "Query too short" });
-    }
-
-    db.query(
-        `SELECT uid AS userId, username, email, name, lastname, profileImage, profilePicture
-     FROM users
-     WHERE username LIKE ? OR name LIKE ?
-     LIMIT 20`,
-        [`${query}%`, `${query}%`],
-        (err, results) => {
-            if (err) {
-                console.error("User search error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            res.json({ success: true, users: results });
-        }
-    );
-});
 
 
 // ======================================================
