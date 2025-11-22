@@ -1733,7 +1733,7 @@ app.post("/conversations/update", (req, res) => {
     }
 
     db.query(
-        `INSERT INTO conversations (uid, otherUid, otherUsername, otherUserImage, lastMessage, timestamp, unreadCount)
+        `INSERT INTO conversations (userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp, unreadCount)
          VALUES (?, ?, ?, ?, ?, ?, 0)
          ON DUPLICATE KEY UPDATE 
          otherUsername = VALUES(otherUsername),
@@ -1757,7 +1757,7 @@ app.get("/conversations/:uid", (req, res) => {
     const { uid } = req.params;
 
     db.query(
-        `SELECT * FROM conversations WHERE uid = ? ORDER BY timestamp DESC`,
+        `SELECT * FROM conversations WHERE userID = ? ORDER BY timestamp DESC`,
         [uid],
         (err, results) => {
             if (err) {
