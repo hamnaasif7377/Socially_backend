@@ -1938,45 +1938,19 @@ app.get("/users/search/:query", (req, res) => {
 
 
 // Send a message
-app.post("/messages/send", (req, res) => {
-    const { messageId, senderId, receiverId, messageText, imageData, timestamp, isSystemMessage } = req.body;
-
-    if (!senderId || !receiverId || (!messageText && !imageData)) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    const chatId = senderId < receiverId ? `${senderId}_${receiverId}` : `${receiverId}_${senderId}`;
-
-    db.query(
-        `INSERT INTO messages 
-         (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
-        [messageId, senderId, receiverId, chatId, messageText || null, imageData || null, timestamp, isSystemMessage || false],
-        (err) => {
-            if (err) {
-                console.error("Send message error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            console.log(`✅ Message sent from ${senderId} to ${receiverId}`);
-            res.json({ success: true, message: "Message sent successfully", messageId, chatId });
-        }
-    );
-});
-
-// Get messages for a chat
 app.get("/messages/:chatId", (req, res) => {
     const { chatId } = req.params;
+
+    console.log("📬 Get messages request for chatId:", chatId);
 
     db.query(
         `SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC`,
         [chatId],
         (err, results) => {
             if (err) {
-                console.error("Get messages error:", err);
-                return res.json({ success: false, message: err.message });
+                console.error("Error fetching messages:", err);
+                return res.status(500).json({ success: false, error: err.message });
             }
-
             res.json({ success: true, messages: results });
         }
     );
