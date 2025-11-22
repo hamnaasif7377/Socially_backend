@@ -1822,6 +1822,31 @@ app.delete("/messages/deleteVanished", (req, res) => {
 });
 
 
+// Search users for messaging
+app.get("/users/search/:query", (req, res) => {
+    const { query } = req.params;
+
+    if (!query || query.length < 2) {
+        return res.json({ success: false, message: "Query too short" });
+    }
+
+    db.query(
+        `SELECT uid AS userId, username, email, name, lastname, profileImage, profilePicture
+     FROM users
+     WHERE username LIKE ? OR name LIKE ?
+     LIMIT 20`,
+        [`${query}%`, `${query}%`],
+        (err, results) => {
+            if (err) {
+                console.error("User search error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            res.json({ success: true, users: results });
+        }
+    );
+});
+
 
 // ======================================================
 // GLOBAL ERROR HANDLING
