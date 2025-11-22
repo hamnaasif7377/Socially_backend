@@ -1559,51 +1559,150 @@ app.put("/users/update", (req, res) => {
 // ---------- MESSAGING ENDPOINTS
 // ======================================================
 
-// Create tables for messaging
-db.query(`
-CREATE TABLE IF NOT EXISTS messages (
-    messageId VARCHAR(255) PRIMARY KEY,
-    senderId VARCHAR(255) NOT NULL,
-    receiverId VARCHAR(255) NOT NULL,
-    chatId VARCHAR(255) NOT NULL,
-    messageText TEXT,
-    imageData LONGTEXT,
-    timestamp BIGINT NOT NULL,
-    isEdited BOOLEAN DEFAULT FALSE,
-    isSystemMessage BOOLEAN DEFAULT FALSE,
-    isVanishMode BOOLEAN DEFAULT FALSE,
-    seenAt BIGINT,
-    INDEX idx_chatId (chatId),
-    INDEX idx_timestamp (timestamp),
-    INDEX idx_senderId (senderId),
-    INDEX idx_receiverUid (receiverUid)
-)`, (err) => {
-    if (err) console.error("Error creating messages table:", err);
-    else console.log("✅ Messages table ready");
+// ======================================================
+// FIXED MESSAGING ENDPOINTS - Add to your server.js
+// ======================================================
+
+// DROP MESSAGES TABLE IF EXISTS
+db.query(`DROP TABLE IF EXISTS messages`, (err) => {
+    if (err) console.error("Error dropping messages table:", err);
+    else console.log("✅ Messages table dropped");
+
+    // CREATE MESSAGES TABLE
+    db.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+        messageId VARCHAR(255) PRIMARY KEY,
+        senderId VARCHAR(255) NOT NULL,
+        receiverId VARCHAR(255) NOT NULL,
+        chatId VARCHAR(255) NOT NULL,
+        messageText TEXT,
+        imageData LONGTEXT,
+        timestamp BIGINT NOT NULL,
+        isEdited BOOLEAN DEFAULT FALSE,
+        isSystemMessage BOOLEAN DEFAULT FALSE,
+        isVanishMode BOOLEAN DEFAULT FALSE,
+        seenAt BIGINT,
+        INDEX idx_chatId (chatId),
+        INDEX idx_timestamp (timestamp),
+        INDEX idx_senderId (senderId),
+        INDEX idx_receiverId (receiverId)
+    )`, (err) => {
+        if (err) console.error("Error creating messages table:", err);
+        else console.log("✅ Messages table ready");
+    });
 });
 
-db.query(`
-CREATE TABLE IF NOT EXISTS conversations (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    uid VARCHAR(255) NOT NULL,
-    otherUid VARCHAR(255) NOT NULL,
-    otherUsername VARCHAR(255),
-    otherUserImage LONGTEXT,
-    lastMessage TEXT,
-    timestamp BIGINT NOT NULL,
-    unreadCount INT DEFAULT 0,
-    UNIQUE KEY unique_conversation (uid, otherUid),
-    INDEX idx_uid (uid),
-    INDEX idx_timestamp (timestamp)
-)`, (err) => {
-    if (err) console.error("Error creating conversations table:", err);
-    else console.log("✅ Conversations table ready");
+// DROP CONVERSATIONS TABLE IF EXISTS
+db.query(`DROP TABLE IF EXISTS conversations`, (err) => {
+    if (err) console.error("Error dropping conversations table:", err);
+    else console.log("✅ Conversations table dropped");
+
+    // CREATE CONVERSATIONS TABLE
+    db.query(`
+    CREATE TABLE IF NOT EXISTS conversations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userId VARCHAR(255) NOT NULL,
+        otherUserId VARCHAR(255) NOT NULL,
+        otherUsername VARCHAR(255),
+        otherUserImage LONGTEXT,
+        lastMessage TEXT,
+        timestamp BIGINT NOT NULL,
+        unreadCount INT DEFAULT 0,
+        UNIQUE KEY unique_conversation (userId, otherUserId),
+        INDEX idx_userId (userId),
+        INDEX idx_timestamp (timestamp)
+    )`, (err) => {
+        if (err) console.error("Error creating conversations table:", err);
+        else console.log("✅ Conversations table ready");
+    });
 });
 
-// Send a message
 
+// ======================================================
+// SEND MESSAGE - FIXED
+// ======================================================
+app.post("/messages/send", (req, res) => {
+    const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage } = req.body;
 
-// Edit a message (within 5 minutes)
+    console.log("📨 Send message request:", { messageId, senderId, receiverUid, hasText: !!messageText, hasImage: !!imageData });
+
+    // Validate required fields
+    if (!senderId || !receiverUid) {
+        console.log("❌ Missing senderId or receiverUid");
+        return res.json({ success: false, message: "Missing required fields: senderId and receiverUid" });
+    }
+
+    if (!messageText && !imageData) {
+        console.log("❌ Missing message content");
+        return res.json({ success: false, message: "Missing message content: messageText or imageData required" });
+    }
+
+    // Generate chatId
+    const chatId = senderId < receiverUid ? `${senderId}_${receiverUid}` : `${receiverUid}_${senderId}`;
+    const actualTimestamp = timestamp || Date.now();
+
+    console.log("✅ Generated chatId:", chatId);
+
+    // Insert message into database
+    db.query(
+        `INSERT INTO messages 
+         (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
+        [
+            messageId || `msg_${Date.now()}`, 
+            senderId, 
+            receiverUid, 
+            chatId, 
+            messageText || null, 
+            imageData || null, 
+            actualTimestamp, 
+            isSystemMessage || false
+        ],
+        (err) => {
+            if (err) {
+                console.error("❌ Send message error:", err.message);
+                console.error("Full error:", err);
+                return res.json({ success: false, message: "Database error: " + err.message });
+            }
+
+            console.log(`✅ Message sent successfully: ${messageId} from ${senderId} to ${receiverUid}`);
+            
+            res.json({ 
+                success: true, 
+                message: "Message sent successfully", 
+                messageId: messageId || `msg_${Date.now()}`,
+                chatId: chatId 
+            });
+        }
+    );
+});
+
+// ======================================================
+// GET MESSAGES FOR A CHAT
+// ======================================================
+app.get("/messages/:chatId", (req, res) => {
+    const { chatId } = req.params;
+
+    console.log("📬 Get messages request for chatId:", chatId);
+
+    db.query(
+        `SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC`,
+        [chatId],
+        (err, results) => {
+            if (err) {
+                console.error("❌ Get messages error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Retrieved ${results.length} messages for chat ${chatId}`);
+            res.json({ success: true, messages: results });
+        }
+    );
+});
+
+// ======================================================
+// EDIT MESSAGE (within 15 minutes)
+// ======================================================
 app.put("/messages/edit", (req, res) => {
     const { messageId, newText, senderId } = req.body;
 
@@ -1620,10 +1719,10 @@ app.put("/messages/edit", (req, res) => {
 
             const message = results[0];
             const currentTime = Date.now();
-            const fiveMinutes = 5 * 60 * 1000;
+            const fifteenMinutes = 15 * 60 * 1000;
 
-            if (currentTime - message.timestamp > fiveMinutes) {
-                return res.json({ success: false, message: "Can't edit message after 5 minutes" });
+            if (currentTime - message.timestamp > fifteenMinutes) {
+                return res.json({ success: false, message: "Can't edit message after 15 minutes" });
             }
 
             db.query(
@@ -1643,7 +1742,9 @@ app.put("/messages/edit", (req, res) => {
     );
 });
 
-// Delete a message (within 5 minutes)
+// ======================================================
+// DELETE MESSAGE (within 15 minutes)
+// ======================================================
 app.delete("/messages/delete", (req, res) => {
     const { messageId, senderId } = req.body;
 
@@ -1660,10 +1761,10 @@ app.delete("/messages/delete", (req, res) => {
 
             const message = results[0];
             const currentTime = Date.now();
-            const fiveMinutes = 5 * 60 * 1000;
+            const fifteenMinutes = 15 * 60 * 1000;
 
-            if (currentTime - message.timestamp > fiveMinutes) {
-                return res.json({ success: false, message: "Can't delete message after 5 minutes" });
+            if (currentTime - message.timestamp > fifteenMinutes) {
+                return res.json({ success: false, message: "Can't delete message after 15 minutes" });
             }
 
             db.query(
@@ -1683,16 +1784,19 @@ app.delete("/messages/delete", (req, res) => {
     );
 });
 
-// Update or create conversation
-
-
-// Update or create conversation
+// ======================================================
+// UPDATE OR CREATE CONVERSATION - FIXED
+// ======================================================
 app.post("/conversations/update", (req, res) => {
     const { userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp } = req.body;
+
+    console.log("💬 Update conversation request:", { userId, otherUserId, otherUsername });
 
     if (!userId || !otherUserId) {
         return res.json({ success: false, message: "Missing required fields" });
     }
+
+    const actualTimestamp = timestamp || Date.now();
 
     db.query(
         `INSERT INTO conversations 
@@ -1703,17 +1807,138 @@ app.post("/conversations/update", (req, res) => {
          otherUserImage = VALUES(otherUserImage),
          lastMessage = VALUES(lastMessage),
          timestamp = VALUES(timestamp)`,
-        [userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp],
+        [userId, otherUserId, otherUsername, otherUserImage || "", lastMessage, actualTimestamp],
         (err) => {
             if (err) {
-                console.error("Update conversation error:", err);
+                console.error("❌ Update conversation error:", err);
                 return res.json({ success: false, message: err.message });
             }
 
+            console.log(`✅ Conversation updated: ${userId} ↔ ${otherUserId}`);
             res.json({ success: true, message: "Conversation updated" });
         }
     );
 });
+
+// ======================================================
+// GET ALL CONVERSATIONS FOR A USER - FIXED
+// ======================================================
+app.get("/conversations/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    console.log("📋 Get conversations request for userId:", userId);
+
+    db.query(
+        `SELECT * FROM conversations WHERE userId = ? ORDER BY timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) {
+                console.error("❌ Get conversations error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Retrieved ${results.length} conversations for user ${userId}`);
+            res.json({ success: true, conversations: results });
+        }
+    );
+});
+
+// ======================================================
+// MARK MESSAGES AS SEEN
+// ======================================================
+app.post("/messages/markSeen", (req, res) => {
+    const { chatId, userId } = req.body;
+
+    if (!chatId || !userId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    const seenAt = Date.now();
+
+    db.query(
+        `UPDATE messages 
+         SET seenAt = ?, isVanishMode = TRUE 
+         WHERE chatId = ? AND receiverId = ? AND seenAt IS NULL`,
+        [seenAt, chatId, userId],
+        (err, result) => {
+            if (err) {
+                console.error("Mark seen error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Marked ${result.affectedRows} messages as seen in chat ${chatId}`);
+            res.json({ success: true, message: "Messages marked as seen", count: result.affectedRows });
+        }
+    );
+});
+
+// ======================================================
+// DELETE VANISHED MESSAGES
+// ======================================================
+app.delete("/messages/deleteVanished", (req, res) => {
+    const { chatId, userId } = req.body;
+
+    if (!chatId || !userId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        `DELETE FROM messages 
+         WHERE chatId = ? AND receiverId = ? AND isVanishMode = TRUE AND seenAt IS NOT NULL`,
+        [chatId, userId],
+        (err, result) => {
+            if (err) {
+                console.error("Delete vanished messages error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Deleted ${result.affectedRows} vanished messages from chat ${chatId}`);
+            res.json({ success: true, message: "Vanished messages deleted", count: result.affectedRows });
+        }
+    );
+});
+
+// ======================================================
+// SEARCH USERS FOR MESSAGING - FIXED
+// ======================================================
+app.get("/users/search/:query", (req, res) => {
+    const { query } = req.params;
+
+    console.log("🔍 User search request for query:", query);
+
+    if (!query || query.length < 2) {
+        return res.json({ success: false, message: "Query too short" });
+    }
+
+    db.query(
+        `SELECT uid, username, email, name, lastname, profileImage, profilePicture
+         FROM users
+         WHERE username LIKE ? OR name LIKE ?
+         LIMIT 20`,
+        [`${query}%`, `${query}%`],
+        (err, results) => {
+            if (err) {
+                console.error("❌ User search error:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            // Format results to match expected structure
+            const users = results.map(user => ({
+                uid: user.uid,
+                username: user.username,
+                email: user.email,
+                name: user.name,
+                lastname: user.lastname || "",
+                profileImage: user.profileImage || user.profilePicture || "",
+                bio: ""
+            }));
+
+            console.log(`✅ Found ${users.length} users for query: ${query}`);
+            res.json({ success: true, users: users });
+        }
+    );
+});
+
 
 // Get all conversations for a user
 app.get("/conversations/:userId", (req, res) => {
@@ -1782,81 +2007,8 @@ app.get("/messages/:chatId", (req, res) => {
     );
 });
 
-// Mark messages as seen
-app.post("/messages/markSeen", (req, res) => {
-    const { chatId, receiverId } = req.body;
 
-    if (!chatId || !receiverId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
 
-    const seenAt = Date.now();
-
-    db.query(
-        `UPDATE messages 
-         SET seenAt = ?, isVanishMode = TRUE 
-         WHERE chatId = ? AND receiverId = ? AND seenAt IS NULL`,
-        [seenAt, chatId, receiverId],
-        (err, result) => {
-            if (err) {
-                console.error("Mark seen error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            console.log(`✅ Marked ${result.affectedRows} messages as seen in chat ${chatId}`);
-            res.json({ success: true, message: "Messages marked as seen", count: result.affectedRows });
-        }
-    );
-});
-
-// Delete vanished messages
-app.delete("/messages/deleteVanished", (req, res) => {
-    const { chatId, receiverId } = req.body;
-
-    if (!chatId || !receiverId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        `DELETE FROM messages 
-         WHERE chatId = ? AND receiverId = ? AND isVanishMode = TRUE AND seenAt IS NOT NULL`,
-        [chatId, receiverId],
-        (err, result) => {
-            if (err) {
-                console.error("Delete vanished messages error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            console.log(`✅ Deleted ${result.affectedRows} vanished messages from chat ${chatId}`);
-            res.json({ success: true, message: "Vanished messages deleted", count: result.affectedRows });
-        }
-    );
-});
-
-// Search users for messaging
-app.get("/users/search/:query", (req, res) => {
-    const { query } = req.params;
-
-    if (!query || query.length < 2) {
-        return res.json({ success: false, message: "Query too short" });
-    }
-
-    db.query(
-        `SELECT uid AS userId, username, email, name, lastname, profileImage, profilePicture
-     FROM users
-     WHERE username LIKE ? OR name LIKE ?
-     LIMIT 20`,
-        [`${query}%`, `${query}%`],
-        (err, results) => {
-            if (err) {
-                console.error("User search error:", err);
-                return res.json({ success: false, message: err.message });
-            }
-
-            res.json({ success: true, users: results });
-        }
-    );
-});
 
 
 // ======================================================
