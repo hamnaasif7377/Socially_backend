@@ -31,7 +31,7 @@ const db = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    ssl: { rejectUnauthorized: false } // <-- RAILWAY REQUIRES SSL
+    ssl: { rejectUnauthorized: false }
 });
 
 // Test pool connection
@@ -44,36 +44,157 @@ db.getConnection((err, connection) => {
     }
 });
 
-// ---- GLOBAL UID COUNTER ----
-let nextUid = 1;
-
-// ---- REGISTER ROUTE ----
 // ======================================================
-// UPDATED REGISTER ROUTE (Replace the old one)
+// CREATE ALL TABLES ON STARTUP
 // ======================================================
 
-// Helper function to generate unique UID
+// Create users table with all required columns
+const createUsersTable = `
+CREATE TABLE IF NOT EXISTS users (
+    uid VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    username_lower VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    lastname VARCHAR(255),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    dob VARCHAR(50),
+    profileImage LONGTEXT,
+    profilePicture LONGTEXT,
+    bio TEXT,
+    website VARCHAR(255),
+    followersCount INT DEFAULT 0,
+    followingCount INT DEFAULT 0,
+    postCount INT DEFAULT 0,
+    fcmToken TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_username_lower (username_lower),
+    INDEX idx_email (email)
+)`;
+
+db.query(createUsersTable, (err) => {
+    if (err) console.error("Error creating users table:", err);
+    else console.log("✅ Users table ready");
+});
+
+// Create posts table
+const createPostsTable = `
+CREATE TABLE IF NOT EXISTS posts (
+    postId VARCHAR(255) PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    profileImage TEXT,
+    images JSON,
+    caption TEXT,
+    location VARCHAR(255),
+    timestamp BIGINT NOT NULL,
+    likesCount INT DEFAULT 0,
+    commentsCount INT DEFAULT 0,
+    INDEX idx_user (userId),
+    INDEX idx_timestamp (timestamp DESC)
+)`;
+
+db.query(createPostsTable, (err) => {
+    if (err) console.error("Error creating posts table:", err);
+    else console.log("✅ Posts table ready");
+});
+
+// Create stories table
+const createStoriesTable = `
+CREATE TABLE IF NOT EXISTS stories (
+    storyId VARCHAR(255) PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    userName VARCHAR(255),
+    username VARCHAR(255),
+    userProfileImage LONGTEXT,
+    profileImage LONGTEXT,
+    imageBase64 LONGTEXT NOT NULL,
+    viewType VARCHAR(50),
+    timestamp BIGINT NOT NULL,
+    expiryTime BIGINT NOT NULL,
+    INDEX idx_user (userId),
+    INDEX idx_expiry (expiryTime)
+)`;
+
+db.query(createStoriesTable, (err) => {
+    if (err) console.error("Error creating stories table:", err);
+    else console.log("✅ Stories table ready");
+});
+
+// Create followers table
+const createFollowersTable = `
+CREATE TABLE IF NOT EXISTS followers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    userId VARCHAR(255) NOT NULL,
+    followerId VARCHAR(255) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    UNIQUE KEY unique_follow (userId, followerId),
+    INDEX idx_user (userId),
+    INDEX idx_follower (followerId)
+)`;
+
+db.query(createFollowersTable, (err) => {
+    if (err) console.error("Error creating followers table:", err);
+    else console.log("✅ Followers table ready");
+});
+
+// Create follow requests table
+const createFollowRequestsTable = `
+CREATE TABLE IF NOT EXISTS follow_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    senderId VARCHAR(255) NOT NULL,
+    receiverId VARCHAR(255) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    status ENUM('pending', 'accepted', 'rejected') DEFAULT 'pending',
+    UNIQUE KEY unique_request (senderId, receiverId),
+    INDEX idx_sender (senderId),
+    INDEX idx_receiver (receiverId),
+    INDEX idx_status (status)
+)`;
+
+db.query(createFollowRequestsTable, (err) => {
+    if (err) console.error("Error creating follow_requests table:", err);
+    else console.log("✅ Follow requests table ready");
+});
+
+// ======================================================
+// HELPER FUNCTIONS
+// ======================================================
+
 function generateUniqueUid() {
     return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+// ======================================================
+// AUTHENTICATION ROUTES
+// ======================================================
+
+// ---- REGISTER ROUTE ----
 app.post("/register", (req, res) => {
     const { username, name, lastname, email, password, dob, profileImage } = req.body;
 
-    console.log("📝 Registration attempt:", { username, email, name, lastname });
+    console.log("📝 Registration attempt:", { 
+        username, 
+        email, 
+        name, 
+        lastname,
+        hasDob: !!dob,
+        hasProfileImage: !!profileImage 
+    });
 
     // Validate required fields
     if (!username || !name || !lastname || !email || !password) {
+        console.log("❌ Missing required fields");
         return res.json({ 
             success: false, 
             message: "Required fields missing" 
         });
     }
 
-    
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+        console.log("❌ Invalid email format:", email);
         return res.json({ 
             success: false, 
             message: "Invalid email format" 
@@ -83,6 +204,7 @@ app.post("/register", (req, res) => {
     // Validate username (alphanumeric, underscores, 3-30 chars)
     const usernameRegex = /^[a-zA-Z0-9_]{3,30}$/;
     if (!usernameRegex.test(username)) {
+        console.log("❌ Invalid username format:", username);
         return res.json({ 
             success: false, 
             message: "Username must be 3-30 characters (letters, numbers, underscores only)" 
@@ -91,6 +213,7 @@ app.post("/register", (req, res) => {
 
     // Validate password length
     if (password.length < 6) {
+        console.log("❌ Password too short");
         return res.json({ 
             success: false, 
             message: "Password must be at least 6 characters" 
@@ -103,22 +226,24 @@ app.post("/register", (req, res) => {
         [email, username],
         (err, results) => {
             if (err) {
-                console.error("❌ Database error checking existing user:", err);
+                console.error("❌ Database error checking existing user:", err.message);
                 return res.json({ 
                     success: false, 
-                    message: "Database error" 
+                    message: "Database error: " + err.message 
                 });
             }
 
             if (results.length > 0) {
                 const existingUser = results[0];
                 if (existingUser.email === email) {
+                    console.log("❌ Email already registered:", email);
                     return res.json({ 
                         success: false, 
                         message: "Email already registered" 
                     });
                 }
                 if (existingUser.username === username) {
+                    console.log("❌ Username already taken:", username);
                     return res.json({ 
                         success: false, 
                         message: "Username already taken" 
@@ -129,57 +254,62 @@ app.post("/register", (req, res) => {
             // Generate unique UID
             const uid = generateUniqueUid();
 
-            // Insert new user
-            db.query(
-                `INSERT INTO users
+            console.log("✅ Validation passed, inserting user:", uid);
+
+            const insertQuery = `
+                INSERT INTO users
                 (uid, username, username_lower, name, lastname, email, password, dob, profileImage, 
                  profilePicture, bio, website, followersCount, followingCount, postCount, fcmToken)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 0, 0, 0, '')`,
-                [
-                    uid, 
-                    username, 
-                    username.toLowerCase(), 
-                    name, 
-                    lastname, 
-                    email, 
-                    password, 
-                    dob || '', 
-                    profileImage || ''
-                ],
-                (err) => {
-                    if (err) {
-                        console.error("❌ Database error inserting user:", err);
-                        return res.json({ 
-                            success: false, 
-                            message: "Registration failed" 
-                        });
-                    }
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 0, 0, 0, '')`;
 
-                    console.log(`✅ User registered successfully: ${username} (UID: ${uid})`);
+            const insertValues = [
+                uid, 
+                username, 
+                username.toLowerCase(), 
+                name, 
+                lastname, 
+                email, 
+                password, 
+                dob || '', 
+                profileImage || ''
+            ];
 
-                    // Return user data (excluding password)
-                    res.json({ 
-                        success: true, 
-                        message: "Registration successful",
-                        user: {
-                            uid: uid,
-                            username: username,
-                            username_lower: username.toLowerCase(),
-                            name: name,
-                            lastname: lastname,
-                            email: email,
-                            dob: dob || '',
-                            profileImage: profileImage || '',
-                            profilePicture: '',
-                            bio: '',
-                            website: '',
-                            followersCount: 0,
-                            followingCount: 0,
-                            postCount: 0
-                        }
+            db.query(insertQuery, insertValues, (err) => {
+                if (err) {
+                    console.error("❌ Database error inserting user:");
+                    console.error("Error code:", err.code);
+                    console.error("Error message:", err.message);
+                    
+                    return res.json({ 
+                        success: false, 
+                        message: "Registration failed: " + err.message 
                     });
                 }
-            );
+
+                console.log(`✅ User registered successfully: ${username} (UID: ${uid})`);
+
+                // Return user data (excluding password)
+                res.json({ 
+                    success: true, 
+                    message: "Registration successful",
+                    user: {
+                        uid: uid,
+                        username: username,
+                        username_lower: username.toLowerCase(),
+                        name: name,
+                        lastname: lastname,
+                        email: email,
+                        dob: dob || '',
+                        profileImage: profileImage || '',
+                        profilePicture: '',
+                        bio: '',
+                        website: '',
+                        followersCount: 0,
+                        followingCount: 0,
+                        postCount: 0
+                    }
+                });
+            });
         }
     );
 });
@@ -236,8 +366,492 @@ app.post("/logout", (req, res) => {
 });
 
 // ======================================================
-// ---------- STORY ENDPOINTS
+// USER ENDPOINTS
 // ======================================================
+
+app.get("/users/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        "SELECT uid, username, username_lower, email, name, lastname, profileImage, profilePicture, bio, website, followersCount, followingCount, postCount FROM users WHERE uid = ?",
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            if (results.length === 0) return res.json({ success: false, message: "User not found" });
+
+            res.json({ success: true, user: results[0] });
+        }
+    );
+});
+
+app.get("/users/:userId/fcmToken", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        "SELECT fcmToken FROM users WHERE uid = ?",
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length === 0) {
+                return res.json({ success: false, message: "User not found" });
+            }
+
+            res.json({ 
+                success: true, 
+                fcmToken: results[0].fcmToken || "" 
+            });
+        }
+    );
+});
+
+app.post("/users/updateFcmToken", (req, res) => {
+    const { userId, fcmToken } = req.body;
+
+    if (!userId || !fcmToken) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "UPDATE users SET fcmToken = ? WHERE uid = ?",
+        [fcmToken, userId],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, message: "FCM token updated" });
+        }
+    );
+});
+
+// ======================================================
+// USER SEARCH ENDPOINT
+// ======================================================
+
+app.post("/users/search", (req, res) => {
+    const { currentUserId, query, filter } = req.body;
+
+    console.log(`🔍 Search request - User: ${currentUserId}, Query: "${query}", Filter: ${filter}`);
+
+    if (!currentUserId || !query) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    const searchPattern = `${query.toLowerCase()}%`;
+
+    let sqlQuery;
+    let queryParams;
+
+    switch (filter) {
+        case "Followers":
+            sqlQuery = `
+                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage, 
+                       u.bio, u.followersCount, u.followingCount, u.postCount
+                FROM users u
+                INNER JOIN followers f ON u.uid = f.followerId
+                WHERE f.userId = ?
+                AND u.uid != ?
+                AND u.username_lower LIKE ?
+                ORDER BY u.username
+                LIMIT 50`;
+            queryParams = [currentUserId, currentUserId, searchPattern];
+            break;
+
+        case "Following":
+            sqlQuery = `
+                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage,
+                       u.bio, u.followersCount, u.followingCount, u.postCount
+                FROM users u
+                INNER JOIN followers f ON u.uid = f.userId
+                WHERE f.followerId = ?
+                AND u.uid != ?
+                AND u.username_lower LIKE ?
+                ORDER BY u.username
+                LIMIT 50`;
+            queryParams = [currentUserId, currentUserId, searchPattern];
+            break;
+
+        case "All":
+        default:
+            sqlQuery = `
+                SELECT uid, username, name, email, profileImage, bio,
+                       followersCount, followingCount, postCount
+                FROM users
+                WHERE uid != ?
+                AND username_lower LIKE ?
+                ORDER BY username
+                LIMIT 50`;
+            queryParams = [currentUserId, searchPattern];
+            break;
+    }
+
+    db.query(sqlQuery, queryParams, (err, results) => {
+        if (err) {
+            console.error("Search error:", err);
+            return res.json({ success: false, message: err.message });
+        }
+
+        console.log(`✅ Found ${results.length} users for query "${query}" with filter "${filter}"`);
+
+        res.json({
+            success: true,
+            users: results,
+            count: results.length
+        });
+    });
+});
+
+// ======================================================
+// FOLLOWERS/FOLLOWING ENDPOINTS
+// ======================================================
+
+app.post("/users/follow", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    if (currentUserId === targetUserId) {
+        return res.json({ success: false, message: "Cannot follow yourself" });
+    }
+
+    const timestamp = Date.now();
+
+    db.query(
+        "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
+        [targetUserId, currentUserId, timestamp],
+        (err) => {
+            if (err) {
+                if (err.code === 'ER_DUP_ENTRY') {
+                    return res.json({ success: false, message: "Already following" });
+                }
+                return res.json({ success: false, message: err.message });
+            }
+
+            db.query(
+                "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
+                [targetUserId]
+            );
+            db.query(
+                "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
+                [currentUserId]
+            );
+
+            res.json({ success: true, message: "User followed successfully" });
+        }
+    );
+});
+
+app.post("/users/unfollow", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "DELETE FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, result) => {
+            if (err) {
+                return res.json({ success: false, message: err.message });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.json({ success: false, message: "Not following this user" });
+            }
+
+            db.query(
+                "UPDATE users SET followersCount = GREATEST(followersCount - 1, 0) WHERE uid = ?",
+                [targetUserId]
+            );
+            db.query(
+                "UPDATE users SET followingCount = GREATEST(followingCount - 1, 0) WHERE uid = ?",
+                [currentUserId]
+            );
+
+            res.json({ success: true, message: "User unfollowed successfully" });
+        }
+    );
+});
+
+app.post("/users/isFollowing", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, isFollowing: results.length > 0 });
+        }
+    );
+});
+
+app.get("/users/:userId/followers", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
+         FROM users u
+         INNER JOIN followers f ON u.uid = f.followerId
+         WHERE f.userId = ?
+         ORDER BY f.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, followers: results });
+        }
+    );
+});
+
+app.get("/users/:userId/following", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
+         FROM users u
+         INNER JOIN followers f ON u.uid = f.userId
+         WHERE f.followerId = ?
+         ORDER BY f.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, following: results });
+        }
+    );
+});
+
+// ======================================================
+// FOLLOW REQUEST ENDPOINTS
+// ======================================================
+
+app.post("/users/sendFollowRequest", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    if (currentUserId === targetUserId) {
+        return res.json({ success: false, message: "Cannot send request to yourself" });
+    }
+
+    const timestamp = Date.now();
+
+    db.query(
+        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
+        [targetUserId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length > 0) {
+                return res.json({ success: false, message: "Already following" });
+            }
+
+            db.query(
+                "INSERT INTO follow_requests (senderId, receiverId, timestamp, status) VALUES (?, ?, ?, 'pending')",
+                [currentUserId, targetUserId, timestamp],
+                (err) => {
+                    if (err) {
+                        if (err.code === 'ER_DUP_ENTRY') {
+                            return res.json({ success: false, message: "Request already sent" });
+                        }
+                        return res.json({ success: false, message: err.message });
+                    }
+
+                    console.log(`✅ Follow request: ${currentUserId} → ${targetUserId}`);
+                    res.json({ success: true, message: "Follow request sent successfully" });
+                }
+            );
+        }
+    );
+});
+
+app.post("/users/cancelFollowRequest", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "DELETE FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [currentUserId, targetUserId],
+        (err, result) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (result.affectedRows === 0) {
+                return res.json({ success: false, message: "No pending request found" });
+            }
+
+            console.log(`✅ Follow request cancelled: ${currentUserId} → ${targetUserId}`);
+            res.json({ success: true, message: "Request cancelled successfully" });
+        }
+    );
+});
+
+app.post("/users/acceptFollowRequest", (req, res) => {
+    const { currentUserId, requesterId } = req.body;
+
+    if (!currentUserId || !requesterId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "SELECT * FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [requesterId, currentUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length === 0) {
+                return res.json({ success: false, message: "No pending request found" });
+            }
+
+            const timestamp = Date.now();
+
+            db.query("START TRANSACTION", (err) => {
+                if (err) return res.json({ success: false, message: err.message });
+
+                db.query(
+                    "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
+                    [currentUserId, requesterId, timestamp],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        db.query(
+                            "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
+                            [currentUserId],
+                            (err) => {
+                                if (err) {
+                                    db.query("ROLLBACK");
+                                    return res.json({ success: false, message: err.message });
+                                }
+
+                                db.query(
+                                    "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
+                                    [requesterId],
+                                    (err) => {
+                                        if (err) {
+                                            db.query("ROLLBACK");
+                                            return res.json({ success: false, message: err.message });
+                                        }
+
+                                        db.query(
+                                            "UPDATE follow_requests SET status = 'accepted' WHERE senderId = ? AND receiverId = ?",
+                                            [requesterId, currentUserId],
+                                            (err) => {
+                                                if (err) {
+                                                    db.query("ROLLBACK");
+                                                    return res.json({ success: false, message: err.message });
+                                                }
+
+                                                db.query("COMMIT", (err) => {
+                                                    if (err) {
+                                                        db.query("ROLLBACK");
+                                                        return res.json({ success: false, message: err.message });
+                                                    }
+
+                                                    console.log(`✅ Follow request accepted: ${requesterId} → ${currentUserId}`);
+                                                    res.json({ success: true, message: "Request accepted successfully" });
+                                                });
+                                            }
+                                        );
+                                    }
+                                );
+                            }
+                        );
+                    }
+                );
+            });
+        }
+    );
+});
+
+app.post("/users/rejectFollowRequest", (req, res) => {
+    const { currentUserId, requesterId } = req.body;
+
+    if (!currentUserId || !requesterId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "UPDATE follow_requests SET status = 'rejected' WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [requesterId, currentUserId],
+        (err, result) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (result.affectedRows === 0) {
+                return res.json({ success: false, message: "No pending request found" });
+            }
+
+            console.log(`✅ Follow request rejected: ${requesterId} → ${currentUserId}`);
+            res.json({ success: true, message: "Request rejected successfully" });
+        }
+    );
+});
+
+app.post("/users/isRequestPending", (req, res) => {
+    const { currentUserId, targetUserId } = req.body;
+
+    if (!currentUserId || !targetUserId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "SELECT * FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
+        [currentUserId, targetUserId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, isPending: results.length > 0 });
+        }
+    );
+});
+
+app.get("/users/:userId/receivedRequests", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT fr.id, fr.senderId, fr.timestamp, u.username, u.name, u.profileImage, u.bio
+         FROM follow_requests fr
+         INNER JOIN users u ON fr.senderId = u.uid
+         WHERE fr.receiverId = ? AND fr.status = 'pending'
+         ORDER BY fr.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, requests: results });
+        }
+    );
+});
+
+app.get("/users/:userId/sentRequests", (req, res) => {
+    const { userId } = req.params;
+
+    db.query(
+        `SELECT fr.id, fr.receiverId, fr.timestamp, u.username, u.name, u.profileImage, u.bio
+         FROM follow_requests fr
+         INNER JOIN users u ON fr.receiverId = u.uid
+         WHERE fr.senderId = ? AND fr.status = 'pending'
+         ORDER BY fr.timestamp DESC`,
+        [userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, requests: results });
+        }
+    );
+});
+
+// ======================================================
+// STORY ENDPOINTS
+// ======================================================
+
 app.post("/stories/upload", (req, res) => {
     const { storyId, userId, userName, userProfileImage, imageBase64, viewType, timestamp, expiryTime } = req.body;
 
@@ -326,65 +940,10 @@ app.delete("/stories/cleanup", (req, res) => {
     });
 });
 
-app.get("/users/:userId", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        "SELECT uid, username, email, name, profileImage FROM users WHERE uid = ?",
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            if (results.length === 0) return res.json({ success: false, message: "User not found" });
-
-            res.json({ success: true, user: results[0] });
-        }
-    );
-});
-
 // ======================================================
-// ---------- POST ENDPOINTS
+// POST ENDPOINTS
 // ======================================================
 
-// Create posts table
-const createPostsTable = `
-CREATE TABLE IF NOT EXISTS posts (
-    postId VARCHAR(255) PRIMARY KEY,
-    userId VARCHAR(255) NOT NULL,
-    username VARCHAR(255) NOT NULL,
-    profileImage TEXT,
-    images JSON,
-    caption TEXT,
-    location VARCHAR(255),
-    timestamp BIGINT NOT NULL,
-    likesCount INT DEFAULT 0,
-    commentsCount INT DEFAULT 0
-)`;
-
-db.query(createPostsTable, (err, result) => {
-    if (err) console.error("Error creating posts table:", err);
-    else console.log("✅ Posts table ready");
-});
-
-// Ensure index exists on timestamp for sorting
-const createIndexQuery = `
-    ALTER TABLE posts
-    ADD INDEX idx_posts_timestamp (timestamp DESC)
-`;
-
-db.query(createIndexQuery, (err) => {
-    if (err) {
-        if (err.code === 'ER_DUP_KEYNAME') {
-            console.log("✅ Index idx_posts_timestamp already exists");
-        } else {
-            console.error("❌ Error creating index:", err);
-        }
-    } else {
-        console.log("✅ Index idx_posts_timestamp created");
-    }
-});
-
-
-// POST - Upload a post
 app.post("/posts/upload", (req, res) => {
     let { postId, userId, username, profileImage, images, caption, location, timestamp } = req.body;
 
@@ -393,7 +952,7 @@ app.post("/posts/upload", (req, res) => {
     }
 
     if (!postId) {
-        postId = require('uuid').v4(); // generate unique ID
+        postId = require('uuid').v4();
     }
 
     if (!timestamp) {
@@ -415,12 +974,10 @@ app.post("/posts/upload", (req, res) => {
     );
 });
 
-// GET - Retrieve all posts with pagination
 app.get("/posts/all", (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
 
-    // Only select necessary columns
     const query = `
         SELECT postId, userId, username, profileImage, images, caption, location, timestamp, likesCount, commentsCount
         FROM posts
@@ -464,8 +1021,6 @@ app.get("/posts/all", (req, res) => {
     });
 });
 
-
-// GET - Retrieve posts by specific user
 app.get("/posts/user/:userId", (req, res) => {
     const { userId } = req.params;
 
@@ -510,543 +1065,16 @@ app.get("/posts/user/:userId", (req, res) => {
     );
 });
 
-// Add these endpoints to your existing server.js file
-
 // ======================================================
-// ---------- FOLLOWERS/FOLLOWING ENDPOINTS
-// ======================================================
-
-// Create followers table
-const createFollowersTable = `
-CREATE TABLE IF NOT EXISTS followers (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    userId VARCHAR(255) NOT NULL,
-    followerId VARCHAR(255) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    UNIQUE KEY unique_follow (userId, followerId),
-    INDEX idx_user (userId),
-    INDEX idx_follower (followerId)
-)`;
-
-db.query(createFollowersTable, (err) => {
-    if (err) console.error("Error creating followers table:", err);
-    else console.log("✅ Followers table ready");
-});
-
-// Follow a user
-app.post("/users/follow", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    if (currentUserId === targetUserId) {
-        return res.json({ success: false, message: "Cannot follow yourself" });
-    }
-
-    const timestamp = Date.now();
-
-    // Insert follow relationship
-    db.query(
-        "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
-        [targetUserId, currentUserId, timestamp],
-        (err) => {
-            if (err) {
-                if (err.code === 'ER_DUP_ENTRY') {
-                    return res.json({ success: false, message: "Already following" });
-                }
-                return res.json({ success: false, message: err.message });
-            }
-
-            // Update follower/following counts
-            db.query(
-                "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
-                [targetUserId]
-            );
-            db.query(
-                "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
-                [currentUserId]
-            );
-
-            res.json({ success: true, message: "User followed successfully" });
-        }
-    );
-});
-
-// Unfollow a user
-app.post("/users/unfollow", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "DELETE FROM followers WHERE userId = ? AND followerId = ?",
-        [targetUserId, currentUserId],
-        (err, result) => {
-            if (err) {
-                return res.json({ success: false, message: err.message });
-            }
-
-            if (result.affectedRows === 0) {
-                return res.json({ success: false, message: "Not following this user" });
-            }
-
-            // Update follower/following counts
-            db.query(
-                "UPDATE users SET followersCount = GREATEST(followersCount - 1, 0) WHERE uid = ?",
-                [targetUserId]
-            );
-            db.query(
-                "UPDATE users SET followingCount = GREATEST(followingCount - 1, 0) WHERE uid = ?",
-                [currentUserId]
-            );
-
-            res.json({ success: true, message: "User unfollowed successfully" });
-        }
-    );
-});
-
-// Check if following
-app.post("/users/isFollowing", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
-        [targetUserId, currentUserId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, isFollowing: results.length > 0 });
-        }
-    );
-});
-
-// ======================================================
-// ---------- USER SEARCH ENDPOINT
-// ======================================================
-
-app.post("/users/search", (req, res) => {
-    const { currentUserId, query, filter } = req.body;
-
-    console.log(`🔍 Search request - User: ${currentUserId}, Query: "${query}", Filter: ${filter}`);
-
-    if (!currentUserId || !query) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    // Sanitize query for SQL LIKE pattern
-    const searchPattern = `${query.toLowerCase()}%`;
-
-    let sqlQuery;
-    let queryParams;
-
-    switch (filter) {
-        case "Followers":
-            // Search users who follow the current user
-            sqlQuery = `
-                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage, 
-                       u.bio, u.followersCount, u.followingCount, u.postCount
-                FROM users u
-                INNER JOIN followers f ON u.uid = f.followerId
-                WHERE f.userId = ?
-                AND u.uid != ?
-                AND u.username_lower LIKE ?
-                ORDER BY u.username
-                LIMIT 50`;
-            queryParams = [currentUserId, currentUserId, searchPattern];
-            break;
-
-        case "Following":
-            // Search users that current user follows
-            sqlQuery = `
-                SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage,
-                       u.bio, u.followersCount, u.followingCount, u.postCount
-                FROM users u
-                INNER JOIN followers f ON u.uid = f.userId
-                WHERE f.followerId = ?
-                AND u.uid != ?
-                AND u.username_lower LIKE ?
-                ORDER BY u.username
-                LIMIT 50`;
-            queryParams = [currentUserId, currentUserId, searchPattern];
-            break;
-
-        case "All":
-        default:
-            // Search all users except current user
-            sqlQuery = `
-                SELECT uid, username, name, email, profileImage, bio,
-                       followersCount, followingCount, postCount
-                FROM users
-                WHERE uid != ?
-                AND username_lower LIKE ?
-                ORDER BY username
-                LIMIT 50`;
-            queryParams = [currentUserId, searchPattern];
-            break;
-    }
-
-    db.query(sqlQuery, queryParams, (err, results) => {
-        if (err) {
-            console.error("Search error:", err);
-            return res.json({ success: false, message: err.message });
-        }
-
-        console.log(`✅ Found ${results.length} users for query "${query}" with filter "${filter}"`);
-
-        res.json({
-            success: true,
-            users: results,
-            count: results.length
-        });
-    });
-});
-
-// Get followers list
-app.get("/users/:userId/followers", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
-         FROM users u
-         INNER JOIN followers f ON u.uid = f.followerId
-         WHERE f.userId = ?
-         ORDER BY f.timestamp DESC`,
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, followers: results });
-        }
-    );
-});
-
-// Get following list
-app.get("/users/:userId/following", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
-         FROM users u
-         INNER JOIN followers f ON u.uid = f.userId
-         WHERE f.followerId = ?
-         ORDER BY f.timestamp DESC`,
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, following: results });
-        }
-    );
-});
-
-
-// Add these additional endpoints to your server.js file
-
-// ======================================================
-// ---------- FOLLOW REQUEST ENDPOINTS
-// ======================================================
-
-// Create follow requests table
-const createFollowRequestsTable = `
-CREATE TABLE IF NOT EXISTS follow_requests (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    senderId VARCHAR(255) NOT NULL,
-    receiverId VARCHAR(255) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    status ENUM('pending', 'accepted', 'rejected') DEFAULT 'pending',
-    UNIQUE KEY unique_request (senderId, receiverId),
-    INDEX idx_sender (senderId),
-    INDEX idx_receiver (receiverId),
-    INDEX idx_status (status)
-)`;
-
-db.query(createFollowRequestsTable, (err) => {
-    if (err) console.error("Error creating follow_requests table:", err);
-    else console.log("✅ Follow requests table ready");
-});
-
-// Send follow request
-app.post("/users/sendFollowRequest", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    if (currentUserId === targetUserId) {
-        return res.json({ success: false, message: "Cannot send request to yourself" });
-    }
-
-    const timestamp = Date.now();
-
-    // Check if already following
-    db.query(
-        "SELECT * FROM followers WHERE userId = ? AND followerId = ?",
-        [targetUserId, currentUserId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-
-            if (results.length > 0) {
-                return res.json({ success: false, message: "Already following" });
-            }
-
-            // Insert follow request
-            db.query(
-                "INSERT INTO follow_requests (senderId, receiverId, timestamp, status) VALUES (?, ?, ?, 'pending')",
-                [currentUserId, targetUserId, timestamp],
-                (err) => {
-                    if (err) {
-                        if (err.code === 'ER_DUP_ENTRY') {
-                            return res.json({ success: false, message: "Request already sent" });
-                        }
-                        return res.json({ success: false, message: err.message });
-                    }
-
-                    console.log(`✅ Follow request: ${currentUserId} → ${targetUserId}`);
-                    res.json({ success: true, message: "Follow request sent successfully" });
-                }
-            );
-        }
-    );
-});
-
-// Cancel follow request
-app.post("/users/cancelFollowRequest", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "DELETE FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
-        [currentUserId, targetUserId],
-        (err, result) => {
-            if (err) return res.json({ success: false, message: err.message });
-
-            if (result.affectedRows === 0) {
-                return res.json({ success: false, message: "No pending request found" });
-            }
-
-            console.log(`✅ Follow request cancelled: ${currentUserId} → ${targetUserId}`);
-            res.json({ success: true, message: "Request cancelled successfully" });
-        }
-    );
-});
-
-// Accept follow request
-app.post("/users/acceptFollowRequest", (req, res) => {
-    const { currentUserId, requesterId } = req.body;
-
-    if (!currentUserId || !requesterId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    // Check if request exists
-    db.query(
-        "SELECT * FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
-        [requesterId, currentUserId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-
-            if (results.length === 0) {
-                return res.json({ success: false, message: "No pending request found" });
-            }
-
-            const timestamp = Date.now();
-
-            // Start transaction: add follower + update counts + update request status
-            db.query("START TRANSACTION", (err) => {
-                if (err) return res.json({ success: false, message: err.message });
-
-                // Add to followers table
-                db.query(
-                    "INSERT INTO followers (userId, followerId, timestamp) VALUES (?, ?, ?)",
-                    [currentUserId, requesterId, timestamp],
-                    (err) => {
-                        if (err) {
-                            db.query("ROLLBACK");
-                            return res.json({ success: false, message: err.message });
-                        }
-
-                        // Update follower counts
-                        db.query(
-                            "UPDATE users SET followersCount = followersCount + 1 WHERE uid = ?",
-                            [currentUserId],
-                            (err) => {
-                                if (err) {
-                                    db.query("ROLLBACK");
-                                    return res.json({ success: false, message: err.message });
-                                }
-
-                                db.query(
-                                    "UPDATE users SET followingCount = followingCount + 1 WHERE uid = ?",
-                                    [requesterId],
-                                    (err) => {
-                                        if (err) {
-                                            db.query("ROLLBACK");
-                                            return res.json({ success: false, message: err.message });
-                                        }
-
-                                        // Mark request as accepted
-                                        db.query(
-                                            "UPDATE follow_requests SET status = 'accepted' WHERE senderId = ? AND receiverId = ?",
-                                            [requesterId, currentUserId],
-                                            (err) => {
-                                                if (err) {
-                                                    db.query("ROLLBACK");
-                                                    return res.json({ success: false, message: err.message });
-                                                }
-
-                                                db.query("COMMIT", (err) => {
-                                                    if (err) {
-                                                        db.query("ROLLBACK");
-                                                        return res.json({ success: false, message: err.message });
-                                                    }
-
-                                                    console.log(`✅ Follow request accepted: ${requesterId} → ${currentUserId}`);
-                                                    res.json({ success: true, message: "Request accepted successfully" });
-                                                });
-                                            }
-                                        );
-                                    }
-                                );
-                            }
-                        );
-                    }
-                );
-            });
-        }
-    );
-});
-
-// Reject follow request
-app.post("/users/rejectFollowRequest", (req, res) => {
-    const { currentUserId, requesterId } = req.body;
-
-    if (!currentUserId || !requesterId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "UPDATE follow_requests SET status = 'rejected' WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
-        [requesterId, currentUserId],
-        (err, result) => {
-            if (err) return res.json({ success: false, message: err.message });
-
-            if (result.affectedRows === 0) {
-                return res.json({ success: false, message: "No pending request found" });
-            }
-
-            console.log(`✅ Follow request rejected: ${requesterId} → ${currentUserId}`);
-            res.json({ success: true, message: "Request rejected successfully" });
-        }
-    );
-});
-
-// Check if follow request is pending
-app.post("/users/isRequestPending", (req, res) => {
-    const { currentUserId, targetUserId } = req.body;
-
-    if (!currentUserId || !targetUserId) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "SELECT * FROM follow_requests WHERE senderId = ? AND receiverId = ? AND status = 'pending'",
-        [currentUserId, targetUserId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, isPending: results.length > 0 });
-        }
-    );
-});
-
-// Get received follow requests (pending only)
-app.get("/users/:userId/receivedRequests", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        `SELECT fr.id, fr.senderId, fr.timestamp, u.username, u.name, u.profileImage, u.bio
-         FROM follow_requests fr
-         INNER JOIN users u ON fr.senderId = u.uid
-         WHERE fr.receiverId = ? AND fr.status = 'pending'
-         ORDER BY fr.timestamp DESC`,
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, requests: results });
-        }
-    );
-});
-
-// Get sent follow requests (pending only)
-app.get("/users/:userId/sentRequests", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        `SELECT fr.id, fr.receiverId, fr.timestamp, u.username, u.name, u.profileImage, u.bio
-         FROM follow_requests fr
-         INNER JOIN users u ON fr.receiverId = u.uid
-         WHERE fr.senderId = ? AND fr.status = 'pending'
-         ORDER BY fr.timestamp DESC`,
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, requests: results });
-        }
-    );
-});
-
-// Get user's FCM token
-app.get("/users/:userId/fcmToken", (req, res) => {
-    const { userId } = req.params;
-
-    db.query(
-        "SELECT fcmToken FROM users WHERE uid = ?",
-        [userId],
-        (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-
-            if (results.length === 0) {
-                return res.json({ success: false, message: "User not found" });
-            }
-
-            res.json({ 
-                success: true, 
-                fcmToken: results[0].fcmToken || "" 
-            });
-        }
-    );
-});
-
-// Update user's FCM token
-app.post("/users/updateFcmToken", (req, res) => {
-    const { userId, fcmToken } = req.body;
-
-    if (!userId || !fcmToken) {
-        return res.json({ success: false, message: "Missing required fields" });
-    }
-
-    db.query(
-        "UPDATE users SET fcmToken = ? WHERE uid = ?",
-        [fcmToken, userId],
-        (err) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, message: "FCM token updated" });
-        }
-    );
-});
-
-
 // GLOBAL ERROR HANDLING
+// ======================================================
+
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
+
+// ======================================================
+// START SERVER
+// ======================================================
 
 app.listen(process.env.PORT || 3000, () => {
     console.log(`🚀 Server running on port ${process.env.PORT || 3000}`);
