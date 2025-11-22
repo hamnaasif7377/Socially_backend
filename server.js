@@ -70,6 +70,7 @@ app.post("/register", (req, res) => {
         });
     }
 
+    
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
