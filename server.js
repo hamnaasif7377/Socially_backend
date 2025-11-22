@@ -1935,16 +1935,14 @@ app.get("/users/search/:query", (req, res) => {
 
 
 
-
-
-// Send a message
+// Get all messages for a chat
 app.get("/messages/:chatId", (req, res) => {
     const { chatId } = req.params;
 
     console.log("📬 Get messages request for chatId:", chatId);
 
     db.query(
-        `SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC`,
+        "SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC",
         [chatId],
         (err, results) => {
             if (err) {
@@ -1955,6 +1953,7 @@ app.get("/messages/:chatId", (req, res) => {
         }
     );
 });
+
 
 
 
