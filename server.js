@@ -2228,7 +2228,411 @@ app.delete("/call/cleanup", (req, res) => {
     );
 });
 
+// ======================================================
+// ADD THESE TO YOUR SERVER.JS
+// ======================================================
 
+// ======================================================
+// CREATE COMMENTS & LIKES TABLES
+// ======================================================
+
+// Create comments table
+const createCommentsTable = `
+CREATE TABLE IF NOT EXISTS comments (
+    commentId VARCHAR(255) PRIMARY KEY,
+    postId VARCHAR(255) NOT NULL,
+    userId VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    profileImage TEXT,
+    text TEXT NOT NULL,
+    timestamp BIGINT NOT NULL,
+    INDEX idx_post (postId),
+    INDEX idx_user (userId),
+    INDEX idx_timestamp (timestamp DESC),
+    FOREIGN KEY (postId) REFERENCES posts(postId) ON DELETE CASCADE
+)`;
+
+db.query(createCommentsTable, (err) => {
+    if (err) console.error("Error creating comments table:", err);
+    else console.log("✅ Comments table ready");
+});
+
+// Create likes table
+const createLikesTable = `
+CREATE TABLE IF NOT EXISTS likes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    postId VARCHAR(255) NOT NULL,
+    userId VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    UNIQUE KEY unique_like (postId, userId),
+    INDEX idx_post (postId),
+    INDEX idx_user (userId),
+    FOREIGN KEY (postId) REFERENCES posts(postId) ON DELETE CASCADE
+)`;
+
+db.query(createLikesTable, (err) => {
+    if (err) console.error("Error creating likes table:", err);
+    else console.log("✅ Likes table ready");
+});
+
+// ======================================================
+// COMMENT ENDPOINTS
+// ======================================================
+
+// POST - Add a comment
+app.post("/comments/add", (req, res) => {
+    const { commentId, postId, userId, username, profileImage, text, timestamp } = req.body;
+
+    console.log("💬 Add comment request:", { commentId, postId, userId, username });
+
+    if (!postId || !userId || !username || !text) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    const actualCommentId = commentId || `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const actualTimestamp = timestamp || Date.now();
+
+    db.query("START TRANSACTION", (err) => {
+        if (err) return res.json({ success: false, message: err.message });
+
+        // Insert comment
+        db.query(
+            `INSERT INTO comments (commentId, postId, userId, username, profileImage, text, timestamp)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [actualCommentId, postId, userId, username, profileImage || "", text, actualTimestamp],
+            (err) => {
+                if (err) {
+                    db.query("ROLLBACK");
+                    console.error("Error adding comment:", err);
+                    return res.json({ success: false, message: err.message });
+                }
+
+                // Increment comment count on post
+                db.query(
+                    "UPDATE posts SET commentsCount = commentsCount + 1 WHERE postId = ?",
+                    [postId],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            console.error("Error updating comment count:", err);
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        db.query("COMMIT", (err) => {
+                            if (err) {
+                                db.query("ROLLBACK");
+                                return res.json({ success: false, message: err.message });
+                            }
+
+                            console.log(`✅ Comment added: ${actualCommentId} on post ${postId}`);
+                            res.json({ 
+                                success: true, 
+                                message: "Comment added successfully",
+                                commentId: actualCommentId
+                            });
+                        });
+                    }
+                );
+            }
+        );
+    });
+});
+
+// GET - Get all comments for a post
+app.get("/comments/:postId", (req, res) => {
+    const { postId } = req.params;
+
+    console.log("📝 Get comments request for postId:", postId);
+
+    db.query(
+        "SELECT * FROM comments WHERE postId = ? ORDER BY timestamp ASC",
+        [postId],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching comments:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Found ${results.length} comments for post ${postId}`);
+            res.json({ success: true, comments: results });
+        }
+    );
+});
+
+// DELETE - Delete a comment
+app.delete("/comments/:commentId", (req, res) => {
+    const { commentId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+        return res.json({ success: false, message: "Missing user ID" });
+    }
+
+    // Get comment details first
+    db.query(
+        "SELECT * FROM comments WHERE commentId = ? AND userId = ?",
+        [commentId, userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+
+            if (results.length === 0) {
+                return res.json({ success: false, message: "Comment not found or unauthorized" });
+            }
+
+            const comment = results[0];
+
+            db.query("START TRANSACTION", (err) => {
+                if (err) return res.json({ success: false, message: err.message });
+
+                // Delete comment
+                db.query(
+                    "DELETE FROM comments WHERE commentId = ?",
+                    [commentId],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        // Decrement comment count
+                        db.query(
+                            "UPDATE posts SET commentsCount = GREATEST(commentsCount - 1, 0) WHERE postId = ?",
+                            [comment.postId],
+                            (err) => {
+                                if (err) {
+                                    db.query("ROLLBACK");
+                                    return res.json({ success: false, message: err.message });
+                                }
+
+                                db.query("COMMIT", (err) => {
+                                    if (err) {
+                                        db.query("ROLLBACK");
+                                        return res.json({ success: false, message: err.message });
+                                    }
+
+                                    console.log(`✅ Comment deleted: ${commentId}`);
+                                    res.json({ success: true, message: "Comment deleted successfully" });
+                                });
+                            }
+                        );
+                    }
+                );
+            });
+        }
+    );
+});
+
+// ======================================================
+// LIKE ENDPOINTS
+// ======================================================
+
+// POST - Like a post
+app.post("/likes/add", (req, res) => {
+    const { postId, userId, username } = req.body;
+
+    console.log("❤️ Like post request:", { postId, userId, username });
+
+    if (!postId || !userId || !username) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    const timestamp = Date.now();
+
+    db.query("START TRANSACTION", (err) => {
+        if (err) return res.json({ success: false, message: err.message });
+
+        // Add like
+        db.query(
+            "INSERT INTO likes (postId, userId, username, timestamp) VALUES (?, ?, ?, ?)",
+            [postId, userId, username, timestamp],
+            (err) => {
+                if (err) {
+                    db.query("ROLLBACK");
+                    if (err.code === 'ER_DUP_ENTRY') {
+                        return res.json({ success: false, message: "Already liked" });
+                    }
+                    console.error("Error adding like:", err);
+                    return res.json({ success: false, message: err.message });
+                }
+
+                // Increment like count on post
+                db.query(
+                    "UPDATE posts SET likesCount = likesCount + 1 WHERE postId = ?",
+                    [postId],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            console.error("Error updating like count:", err);
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        db.query("COMMIT", (err) => {
+                            if (err) {
+                                db.query("ROLLBACK");
+                                return res.json({ success: false, message: err.message });
+                            }
+
+                            console.log(`✅ Post liked: ${postId} by ${username}`);
+                            res.json({ success: true, message: "Post liked successfully" });
+                        });
+                    }
+                );
+            }
+        );
+    });
+});
+
+// DELETE - Unlike a post
+app.delete("/likes/remove", (req, res) => {
+    const { postId, userId } = req.body;
+
+    console.log("💔 Unlike post request:", { postId, userId });
+
+    if (!postId || !userId) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query("START TRANSACTION", (err) => {
+        if (err) return res.json({ success: false, message: err.message });
+
+        // Remove like
+        db.query(
+            "DELETE FROM likes WHERE postId = ? AND userId = ?",
+            [postId, userId],
+            (err, result) => {
+                if (err) {
+                    db.query("ROLLBACK");
+                    return res.json({ success: false, message: err.message });
+                }
+
+                if (result.affectedRows === 0) {
+                    db.query("ROLLBACK");
+                    return res.json({ success: false, message: "Like not found" });
+                }
+
+                // Decrement like count
+                db.query(
+                    "UPDATE posts SET likesCount = GREATEST(likesCount - 1, 0) WHERE postId = ?",
+                    [postId],
+                    (err) => {
+                        if (err) {
+                            db.query("ROLLBACK");
+                            return res.json({ success: false, message: err.message });
+                        }
+
+                        db.query("COMMIT", (err) => {
+                            if (err) {
+                                db.query("ROLLBACK");
+                                return res.json({ success: false, message: err.message });
+                            }
+
+                            console.log(`✅ Post unliked: ${postId} by ${userId}`);
+                            res.json({ success: true, message: "Post unliked successfully" });
+                        });
+                    }
+                );
+            }
+        );
+    });
+});
+
+// GET - Check if user liked a post
+app.get("/likes/check/:postId/:userId", (req, res) => {
+    const { postId, userId } = req.params;
+
+    db.query(
+        "SELECT * FROM likes WHERE postId = ? AND userId = ?",
+        [postId, userId],
+        (err, results) => {
+            if (err) return res.json({ success: false, message: err.message });
+            res.json({ success: true, isLiked: results.length > 0 });
+        }
+    );
+});
+
+// GET - Get all users who liked a post
+app.get("/likes/:postId", (req, res) => {
+    const { postId } = req.params;
+
+    db.query(
+        `SELECT l.userId, l.username, l.timestamp, u.profileImage, u.name
+         FROM likes l
+         LEFT JOIN users u ON l.userId = u.uid
+         WHERE l.postId = ?
+         ORDER BY l.timestamp DESC`,
+        [postId],
+        (err, results) => {
+            if (err) {
+                console.error("Error fetching likes:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            console.log(`✅ Found ${results.length} likes for post ${postId}`);
+            res.json({ success: true, likes: results });
+        }
+    );
+});
+
+// ======================================================
+// ENHANCED GET POSTS - Include like status for current user
+// ======================================================
+
+// Update existing /posts/all endpoint to include like status
+app.get("/posts/feed/:userId", (req, res) => {
+    const { userId } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+
+    console.log(`📰 Get feed for user: ${userId}`);
+
+    const query = `
+        SELECT 
+            p.*,
+            EXISTS(SELECT 1 FROM likes WHERE postId = p.postId AND userId = ?) as isLikedByUser
+        FROM posts p
+        ORDER BY p.timestamp DESC
+        LIMIT ? OFFSET ?`;
+
+    db.query(query, [userId, limit, offset], (err, results) => {
+        if (err) {
+            console.error("Error fetching feed:", err);
+            return res.json({ success: false, message: err.message });
+        }
+
+        const posts = results.map(post => {
+            let images = [];
+            if (Array.isArray(post.images)) {
+                images = post.images;
+            } else if (typeof post.images === 'string') {
+                try {
+                    images = JSON.parse(post.images);
+                } catch (e) {
+                    images = [post.images];
+                }
+            }
+
+            return {
+                postId: post.postId,
+                userId: post.userId,
+                username: post.username,
+                profileImage: post.profileImage || "",
+                images: images,
+                caption: post.caption || "",
+                location: post.location || "",
+                timestamp: post.timestamp,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0,
+                isLikedByUser: post.isLikedByUser === 1
+            };
+        });
+
+        console.log(`✅ Fetched ${posts.length} posts for feed`);
+        res.json({ success: true, posts, limit, offset });
+    });
+});
+
+console.log("✅ Likes & Comments endpoints added");
 
 // ======================================================
 // GLOBAL ERROR HANDLING
