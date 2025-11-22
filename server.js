@@ -1672,27 +1672,6 @@ app.post("/messages/send", (req, res) => {
 });
 
 // ======================================================
-// GET MESSAGES FOR A CHAT
-// ======================================================
-app.get("/messages/:chatId", (req, res) => {
-    const { chatId } = req.params;
-
-    console.log("📬 Get messages request for chatId:", chatId);
-
-    db.query(
-  `SELECT * FROM messages 
-   WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)
-   ORDER BY timestamp ASC`,
-  [userId, otherUserId, otherUserId, userId],
-  (err, results) => {
-      if (err) return res.json({ success: false, error: err.message });
-      res.json({ success: true, messages: results });
-  }
-);
-
-});
-
-// ======================================================
 // EDIT MESSAGE (within 15 minutes)
 // ======================================================
 app.put("/messages/edit", (req, res) => {
