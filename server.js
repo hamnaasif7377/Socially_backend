@@ -1100,28 +1100,85 @@ db.query(createNotificationsTable, (err) => {
 // ======================================================
 
 // Get notifications for a user
+// ======================================================
+// UPDATED NOTIFICATION ENDPOINT - INCLUDES FOLLOW REQUESTS
+// Replace the existing /notifications/:userId endpoint with this one
+// ======================================================
+
 app.get("/notifications/:userId", (req, res) => {
     const { userId } = req.params;
     const includeRead = req.query.includeRead === 'true';
 
-    let query = `
-        SELECT * FROM notifications 
+    console.log(`📬 Fetching notifications for user: ${userId}, includeRead: ${includeRead}`);
+
+    // First, get regular notifications
+    let notificationsQuery = `
+        SELECT 
+            id as notificationId,
+            userId,
+            fromUserId,
+            fromUsername,
+            fromProfileImage,
+            message,
+            type,
+            postImage,
+            timestamp,
+            isRead
+        FROM notifications 
         WHERE userId = ?`;
     
     if (!includeRead) {
-        query += ` AND isRead = FALSE`;
+        notificationsQuery += ` AND isRead = FALSE`;
     }
-    
-    query += ` ORDER BY timestamp DESC LIMIT 50`;
 
-    db.query(query, [userId], (err, results) => {
+    // Then, get pending follow requests
+    const followRequestsQuery = `
+        SELECT 
+            fr.id as notificationId,
+            fr.receiverId as userId,
+            fr.senderId as fromUserId,
+            u.username as fromUsername,
+            u.profileImage as fromProfileImage,
+            'sent you a follow request' as message,
+            'follow_request' as type,
+            NULL as postImage,
+            fr.timestamp,
+            FALSE as isRead
+        FROM follow_requests fr
+        INNER JOIN users u ON fr.senderId = u.uid
+        WHERE fr.receiverId = ? AND fr.status = 'pending'`;
+
+    // Execute both queries
+    db.query(notificationsQuery, [userId], (err, notificationResults) => {
         if (err) {
             console.error("Error fetching notifications:", err);
             return res.json({ success: false, message: err.message });
         }
 
-        console.log(`✅ Fetched ${results.length} notifications for user: ${userId}`);
-        res.json({ success: true, notifications: results });
+        db.query(followRequestsQuery, [userId], (err, followRequestResults) => {
+            if (err) {
+                console.error("Error fetching follow requests:", err);
+                return res.json({ success: false, message: err.message });
+            }
+
+            // Combine both results
+            const allNotifications = [...notificationResults, ...followRequestResults];
+
+            // Sort by timestamp (most recent first)
+            allNotifications.sort((a, b) => b.timestamp - a.timestamp);
+
+            // Limit to 50 most recent
+            const limitedNotifications = allNotifications.slice(0, 50);
+
+            console.log(`✅ Fetched ${notificationResults.length} regular notifications and ${followRequestResults.length} follow requests for user: ${userId}`);
+            console.log(`Total: ${limitedNotifications.length} notifications`);
+
+            res.json({ 
+                success: true, 
+                notifications: limitedNotifications,
+                count: limitedNotifications.length
+            });
+        });
     });
 });
 
