@@ -1457,6 +1457,104 @@ app.post("/users/rejectFollowRequest", (req, res) => {
     );
 });
 
+
+// UPDATE user profile
+app.put("/users/update", (req, res) => {
+    const { userId, username, name, lastname, bio, website, phone, gender, profileImage } = req.body;
+
+    if (!userId) {
+        return res.json({ success: false, message: "User ID required" });
+    }
+
+    // Check if username is being changed and if it's already taken by another user
+    const checkUsernameQuery = username 
+        ? "SELECT * FROM users WHERE username = ? AND uid != ?"
+        : null;
+
+    const executeUpdate = () => {
+        const updates = [];
+        const values = [];
+
+        if (username !== undefined) {
+            updates.push("username = ?");
+            values.push(username);
+            updates.push("username_lower = ?");
+            values.push(username.toLowerCase());
+        }
+        if (name !== undefined) {
+            updates.push("name = ?");
+            values.push(name);
+        }
+        if (lastname !== undefined) {
+            updates.push("lastname = ?");
+            values.push(lastname);
+        }
+        if (bio !== undefined) {
+            updates.push("bio = ?");
+            values.push(bio);
+        }
+        if (website !== undefined) {
+            updates.push("website = ?");
+            values.push(website);
+        }
+        if (phone !== undefined) {
+            updates.push("phone = ?");
+            values.push(phone);
+        }
+        if (gender !== undefined) {
+            updates.push("gender = ?");
+            values.push(gender);
+        }
+        if (profileImage !== undefined) {
+            updates.push("profileImage = ?");
+            values.push(profileImage);
+            updates.push("profilePicture = ?");
+            values.push(profileImage);
+        }
+
+        values.push(userId);
+
+        if (updates.length === 0) {
+            return res.json({ success: false, message: "No fields to update" });
+        }
+
+        const query = `UPDATE users SET ${updates.join(", ")} WHERE uid = ?`;
+
+        db.query(query, values, (err, result) => {
+            if (err) {
+                console.error("Update error:", err);
+                return res.json({ success: false, message: "Failed to update profile" });
+            }
+
+            // Fetch updated user data
+            db.query(
+                "SELECT uid, username, email, name, lastname, bio, website, phone, gender, profileImage, profilePicture, followersCount, followingCount, postCount FROM users WHERE uid = ?",
+                [userId],
+                (err, results) => {
+                    if (err) return res.json({ success: false, message: "Database error" });
+                    
+                    console.log(`✅ Profile updated for user ${userId}`);
+                    res.json({ success: true, message: "Profile updated successfully", user: results[0] });
+                }
+            );
+        });
+    };
+
+    // If username is being changed, check if it's available
+    if (checkUsernameQuery) {
+        db.query(checkUsernameQuery, [username, userId], (err, results) => {
+            if (err) return res.json({ success: false, message: "Database error" });
+            if (results.length > 0) {
+                return res.json({ success: false, message: "Username already taken" });
+            }
+            executeUpdate();
+        });
+    } else {
+        executeUpdate();
+    }
+});
+
+
 // ======================================================
 // GLOBAL ERROR HANDLING
 // ======================================================
