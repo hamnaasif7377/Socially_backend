@@ -1650,6 +1650,71 @@ app.delete("/screenshots/cleanup", (req, res) => {
 // ======================================================
 // CALL ENDPOINTS
 // ======================================================
+// ======================================================
+// PRESENCE ENDPOINTS - FIXED VERSION
+// ======================================================
+
+app.post("/users/presence/update", (req, res) => {
+    const { userId, isOnline } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ success: false, message: "Missing user ID" });
+    }
+
+    const lastSeen = Date.now();
+
+    console.log(`👤 Updating presence for ${userId}: ${isOnline ? 'online' : 'offline'} at ${new Date(lastSeen).toISOString()}`);
+
+    db.query(
+        `INSERT INTO user_presence (user_id, is_online, last_seen) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE is_online = VALUES(is_online), last_seen = VALUES(last_seen)`,
+        [userId, isOnline ? 1 : 0, lastSeen],
+        (err) => {
+            if (err) {
+                console.log("❌ Error updating presence:", err);
+                return res.status(500).json({ success: false, message: err.message });
+            }
+            
+            console.log(`✅ Presence updated for ${userId}`);
+            res.json({ success: true, message: "Presence updated" });
+        }
+    );
+});
+
+app.get("/users/presence/:userId", (req, res) => {
+    const { userId } = req.params;
+
+    console.log(`🔍 Checking presence for ${userId}`);
+
+    db.query("SELECT is_online, last_seen FROM user_presence WHERE user_id = ?", [userId], (err, results) => {
+        if (err) {
+            console.log("❌ Database error:", err);
+            return res.status(500).json({ success: false, message: err.message });
+        }
+        
+        if (results.length === 0) {
+            console.log(`⚠️ No presence record found for ${userId} - treating as offline`);
+            return res.json({ success: true, isOnline: false, lastSeen: 0 });
+        }
+
+        const presence = results[0];
+        const thirtySecondsAgo = Date.now() - 30000;
+        const isOnline = presence.is_online && presence.last_seen > thirtySecondsAgo;
+
+        console.log(`📊 User ${userId} presence:`, {
+            is_online: presence.is_online,
+            last_seen: new Date(presence.last_seen).toISOString(),
+            calculated_online: isOnline,
+            time_diff_ms: Date.now() - presence.last_seen
+        });
+
+        res.json({ 
+            success: true, 
+            isOnline, 
+            lastSeen: presence.last_seen 
+        });
+    });
+});
 
 // ======================================================
 // CALL ENDPOINTS - FIXED VERSION
@@ -1662,19 +1727,19 @@ app.post("/call/initiate", (req, res) => {
 
     if (!caller_id || !receiver_id || !channel_name || !call_type) {
         console.log("❌ Missing required fields");
-        return res.json({ success: false, message: "Missing required fields" });
+        return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
     if (caller_id === receiver_id) {
         console.log("❌ Cannot call yourself");
-        return res.json({ success: false, message: "Cannot call yourself" });
+        return res.status(400).json({ success: false, message: "Cannot call yourself" });
     }
 
     // Check if receiver is online
     db.query("SELECT is_online, last_seen FROM user_presence WHERE user_id = ?", [receiver_id], (err, results) => {
         if (err) {
             console.log("❌ Database error:", err);
-            return res.json({ success: false, message: "Database error" });
+            return res.status(500).json({ success: false, message: "Database error" });
         }
 
         // Check if user is online (updated within last 30 seconds)
@@ -1683,13 +1748,16 @@ app.post("/call/initiate", (req, res) => {
         
         console.log("🔍 Receiver presence check:", { 
             receiver_id, 
-            isOnline, 
-            last_seen: results.length > 0 ? new Date(results[0].last_seen).toISOString() : 'never' 
+            has_record: results.length > 0,
+            is_online_flag: results.length > 0 ? results[0].is_online : false,
+            last_seen: results.length > 0 ? new Date(results[0].last_seen).toISOString() : 'never',
+            time_diff_ms: results.length > 0 ? Date.now() - results[0].last_seen : 'N/A',
+            calculated_online: isOnline
         });
 
         if (!isOnline) {
             console.log("❌ User is offline");
-            return res.json({ success: false, message: "User is offline" });
+            return res.status(400).json({ success: false, message: "User is offline" });
         }
 
         const call_id = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1703,7 +1771,7 @@ app.post("/call/initiate", (req, res) => {
             (err) => {
                 if (err) {
                     console.log("❌ Failed to create call request:", err);
-                    return res.json({ success: false, message: "Failed to create call request" });
+                    return res.status(500).json({ success: false, message: "Failed to create call request" });
                 }
 
                 console.log(`✅ Call request created: ${call_id} (${caller_name} → ${receiver_id})`);
@@ -1750,7 +1818,7 @@ app.get("/call/incoming/:userId", (req, res) => {
         (err, results) => {
             if (err) {
                 console.log("❌ Error fetching calls:", err);
-                return res.json({ success: false, message: err.message });
+                return res.status(500).json({ success: false, message: err.message });
             }
             
             console.log(`📋 Found ${results.length} pending call(s) for ${userId}`);
@@ -1765,11 +1833,11 @@ app.get("/call/:callId/status", (req, res) => {
     db.query("SELECT status FROM call_requests WHERE call_id = ?", [callId], (err, results) => {
         if (err) {
             console.log("❌ Error fetching call status:", err);
-            return res.json({ success: false, message: err.message });
+            return res.status(500).json({ success: false, message: err.message });
         }
         if (results.length === 0) {
             console.log("❌ Call not found:", callId);
-            return res.json({ success: false, message: "Call not found" });
+            return res.status(404).json({ success: false, message: "Call not found" });
         }
         
         const status = results[0].status;
@@ -1786,17 +1854,17 @@ app.put("/call/:callId/status", (req, res) => {
 
     if (!status || !['calling', 'accepted', 'rejected', 'ended'].includes(status)) {
         console.log("❌ Invalid status");
-        return res.json({ success: false, message: "Invalid status" });
+        return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
     db.query("UPDATE call_requests SET status = ? WHERE call_id = ?", [status, callId], (err, result) => {
         if (err) {
             console.log("❌ Error updating status:", err);
-            return res.json({ success: false, message: err.message });
+            return res.status(500).json({ success: false, message: err.message });
         }
         if (result.affectedRows === 0) {
             console.log("❌ Call not found");
-            return res.json({ success: false, message: "Call not found" });
+            return res.status(404).json({ success: false, message: "Call not found" });
         }
         
         console.log(`✅ Call status updated: ${callId} → ${status}`);
@@ -1812,57 +1880,11 @@ app.delete("/call/:callId", (req, res) => {
     db.query("DELETE FROM call_requests WHERE call_id = ?", [callId], (err) => {
         if (err) {
             console.log("❌ Error deleting call:", err);
-            return res.json({ success: false, message: err.message });
+            return res.status(500).json({ success: false, message: err.message });
         }
         
         console.log(`✅ Call deleted: ${callId}`);
         res.json({ success: true, message: "Call request deleted" });
-    });
-});
-
-app.post("/users/presence/update", (req, res) => {
-    const { userId, isOnline } = req.body;
-
-    if (!userId) {
-        return res.json({ success: false, message: "Missing user ID" });
-    }
-
-    const lastSeen = Date.now();
-
-    console.log(`👤 Updating presence for ${userId}: ${isOnline ? 'online' : 'offline'}`);
-
-    db.query(
-        `INSERT INTO user_presence (user_id, is_online, last_seen) VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE is_online = VALUES(is_online), last_seen = VALUES(last_seen)`,
-        [userId, isOnline, lastSeen],
-        (err) => {
-            if (err) {
-                console.log("❌ Error updating presence:", err);
-                return res.json({ success: false, message: err.message });
-            }
-            
-            console.log(`✅ Presence updated for ${userId}`);
-            res.json({ success: true, message: "Presence updated" });
-        }
-    );
-});
-
-app.get("/users/presence/:userId", (req, res) => {
-    const { userId } = req.params;
-
-    db.query("SELECT is_online, last_seen FROM user_presence WHERE user_id = ?", [userId], (err, results) => {
-        if (err) {
-            return res.json({ success: false, message: err.message });
-        }
-        if (results.length === 0) {
-            return res.json({ success: true, isOnline: false, lastSeen: 0 });
-        }
-
-        const presence = results[0];
-        const thirtySecondsAgo = Date.now() - 30000;
-        const isOnline = presence.is_online && presence.last_seen > thirtySecondsAgo;
-
-        res.json({ success: true, isOnline, lastSeen: presence.last_seen });
     });
 });
 
@@ -1874,7 +1896,7 @@ app.delete("/call/cleanup", (req, res) => {
     db.query("DELETE FROM call_requests WHERE timestamp < ? AND status = 'calling'", [twoMinutesAgo], (err, result) => {
         if (err) {
             console.log("❌ Error cleaning up calls:", err);
-            return res.json({ success: false, message: err.message });
+            return res.status(500).json({ success: false, message: err.message });
         }
         
         console.log(`✅ Deleted ${result.affectedRows} expired calls`);
