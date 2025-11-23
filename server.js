@@ -7,6 +7,9 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const session = require('express-session');
 
+
+
+
 // ---- SESSION MANAGEMENT ----
 app.use(
     session({
@@ -1648,48 +1651,87 @@ app.delete("/screenshots/cleanup", (req, res) => {
 // CALL ENDPOINTS
 // ======================================================
 
+// ======================================================
+// CALL ENDPOINTS - FIXED VERSION
+// ======================================================
+
 app.post("/call/initiate", (req, res) => {
     const { caller_id, caller_name, caller_profile_image, receiver_id, channel_name, call_type } = req.body;
 
+    console.log("📞 Call initiation request:", { caller_id, caller_name, receiver_id, call_type });
+
     if (!caller_id || !receiver_id || !channel_name || !call_type) {
+        console.log("❌ Missing required fields");
         return res.json({ success: false, message: "Missing required fields" });
     }
 
     if (caller_id === receiver_id) {
+        console.log("❌ Cannot call yourself");
         return res.json({ success: false, message: "Cannot call yourself" });
     }
 
-    db.query("SELECT is_online FROM user_presence WHERE user_id = ?", [receiver_id], (err, results) => {
-        if (err) return res.json({ success: false, message: "Database error" });
+    // Check if receiver is online
+    db.query("SELECT is_online, last_seen FROM user_presence WHERE user_id = ?", [receiver_id], (err, results) => {
+        if (err) {
+            console.log("❌ Database error:", err);
+            return res.json({ success: false, message: "Database error" });
+        }
 
-        const isOnline = results.length > 0 && results[0].is_online;
+        // Check if user is online (updated within last 30 seconds)
+        const thirtySecondsAgo = Date.now() - 30000;
+        const isOnline = results.length > 0 && results[0].is_online && results[0].last_seen > thirtySecondsAgo;
         
+        console.log("🔍 Receiver presence check:", { 
+            receiver_id, 
+            isOnline, 
+            last_seen: results.length > 0 ? new Date(results[0].last_seen).toISOString() : 'never' 
+        });
+
         if (!isOnline) {
+            console.log("❌ User is offline");
             return res.json({ success: false, message: "User is offline" });
         }
 
         const call_id = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const timestamp = Date.now();
 
+        // Insert call request
         db.query(
             `INSERT INTO call_requests (call_id, caller_id, caller_name, caller_profile_image, receiver_id, channel_name, call_type, status, timestamp)
              VALUES (?, ?, ?, ?, ?, ?, ?, 'calling', ?)`,
             [call_id, caller_id, caller_name, caller_profile_image || "", receiver_id, channel_name, call_type, timestamp],
             (err) => {
-                if (err) return res.json({ success: false, message: "Failed to create call request" });
-
-                // Create pending notification for incoming call
-                createPendingNotification(
-                    receiver_id, 
-                    caller_id, 
-                    caller_name, 
-                    "incoming_call", 
-                    `Incoming ${call_type} call`,
-                    { callId: call_id, channelName: channel_name, callType: call_type, callerProfileImage: caller_profile_image || "" }
-                );
+                if (err) {
+                    console.log("❌ Failed to create call request:", err);
+                    return res.json({ success: false, message: "Failed to create call request" });
+                }
 
                 console.log(`✅ Call request created: ${call_id} (${caller_name} → ${receiver_id})`);
-                res.json({ success: true, message: "Call request created", call_id, channel_name });
+                
+                // Return success immediately
+                res.json({ 
+                    success: true, 
+                    message: "Call request created", 
+                    call_id, 
+                    channel_name 
+                });
+
+                // Create notification asynchronously (don't wait for it)
+                if (typeof createPendingNotification === 'function') {
+                    createPendingNotification(
+                        receiver_id, 
+                        caller_id, 
+                        caller_name, 
+                        "incoming_call", 
+                        `Incoming ${call_type} call`,
+                        { 
+                            callId: call_id, 
+                            channelName: channel_name, 
+                            callType: call_type, 
+                            callerProfileImage: caller_profile_image || "" 
+                        }
+                    );
+                }
             }
         );
     });
@@ -1698,12 +1740,20 @@ app.post("/call/initiate", (req, res) => {
 app.get("/call/incoming/:userId", (req, res) => {
     const { userId } = req.params;
 
+    console.log(`🔍 Checking incoming calls for user: ${userId}`);
+
     db.query(
-        `SELECT * FROM call_requests WHERE receiver_id = ? AND status = 'calling' 
+        `SELECT * FROM call_requests 
+         WHERE receiver_id = ? AND status = 'calling' 
          ORDER BY timestamp DESC LIMIT 10`,
         [userId],
         (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
+            if (err) {
+                console.log("❌ Error fetching calls:", err);
+                return res.json({ success: false, message: err.message });
+            }
+            
+            console.log(`📋 Found ${results.length} pending call(s) for ${userId}`);
             res.json(results);
         }
     );
@@ -1713,9 +1763,18 @@ app.get("/call/:callId/status", (req, res) => {
     const { callId } = req.params;
 
     db.query("SELECT status FROM call_requests WHERE call_id = ?", [callId], (err, results) => {
-        if (err) return res.json({ success: false, message: err.message });
-        if (results.length === 0) return res.json({ success: false, message: "Call not found" });
-        res.json({ success: true, status: results[0].status });
+        if (err) {
+            console.log("❌ Error fetching call status:", err);
+            return res.json({ success: false, message: err.message });
+        }
+        if (results.length === 0) {
+            console.log("❌ Call not found:", callId);
+            return res.json({ success: false, message: "Call not found" });
+        }
+        
+        const status = results[0].status;
+        console.log(`📊 Call ${callId} status: ${status}`);
+        res.json({ success: true, status });
     });
 });
 
@@ -1723,13 +1782,24 @@ app.put("/call/:callId/status", (req, res) => {
     const { callId } = req.params;
     const { status } = req.body;
 
+    console.log(`🔄 Updating call ${callId} to status: ${status}`);
+
     if (!status || !['calling', 'accepted', 'rejected', 'ended'].includes(status)) {
+        console.log("❌ Invalid status");
         return res.json({ success: false, message: "Invalid status" });
     }
 
     db.query("UPDATE call_requests SET status = ? WHERE call_id = ?", [status, callId], (err, result) => {
-        if (err) return res.json({ success: false, message: err.message });
-        if (result.affectedRows === 0) return res.json({ success: false, message: "Call not found" });
+        if (err) {
+            console.log("❌ Error updating status:", err);
+            return res.json({ success: false, message: err.message });
+        }
+        if (result.affectedRows === 0) {
+            console.log("❌ Call not found");
+            return res.json({ success: false, message: "Call not found" });
+        }
+        
+        console.log(`✅ Call status updated: ${callId} → ${status}`);
         res.json({ success: true, message: "Status updated" });
     });
 });
@@ -1737,8 +1807,15 @@ app.put("/call/:callId/status", (req, res) => {
 app.delete("/call/:callId", (req, res) => {
     const { callId } = req.params;
 
+    console.log(`🗑️ Deleting call: ${callId}`);
+
     db.query("DELETE FROM call_requests WHERE call_id = ?", [callId], (err) => {
-        if (err) return res.json({ success: false, message: err.message });
+        if (err) {
+            console.log("❌ Error deleting call:", err);
+            return res.json({ success: false, message: err.message });
+        }
+        
+        console.log(`✅ Call deleted: ${callId}`);
         res.json({ success: true, message: "Call request deleted" });
     });
 });
@@ -1752,12 +1829,19 @@ app.post("/users/presence/update", (req, res) => {
 
     const lastSeen = Date.now();
 
+    console.log(`👤 Updating presence for ${userId}: ${isOnline ? 'online' : 'offline'}`);
+
     db.query(
         `INSERT INTO user_presence (user_id, is_online, last_seen) VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE is_online = VALUES(is_online), last_seen = VALUES(last_seen)`,
         [userId, isOnline, lastSeen],
         (err) => {
-            if (err) return res.json({ success: false, message: err.message });
+            if (err) {
+                console.log("❌ Error updating presence:", err);
+                return res.json({ success: false, message: err.message });
+            }
+            
+            console.log(`✅ Presence updated for ${userId}`);
             res.json({ success: true, message: "Presence updated" });
         }
     );
@@ -1767,8 +1851,12 @@ app.get("/users/presence/:userId", (req, res) => {
     const { userId } = req.params;
 
     db.query("SELECT is_online, last_seen FROM user_presence WHERE user_id = ?", [userId], (err, results) => {
-        if (err) return res.json({ success: false, message: err.message });
-        if (results.length === 0) return res.json({ success: true, isOnline: false, lastSeen: 0 });
+        if (err) {
+            return res.json({ success: false, message: err.message });
+        }
+        if (results.length === 0) {
+            return res.json({ success: true, isOnline: false, lastSeen: 0 });
+        }
 
         const presence = results[0];
         const thirtySecondsAgo = Date.now() - 30000;
@@ -1781,8 +1869,15 @@ app.get("/users/presence/:userId", (req, res) => {
 app.delete("/call/cleanup", (req, res) => {
     const twoMinutesAgo = Date.now() - (2 * 60 * 1000);
 
+    console.log("🧹 Cleaning up old calls...");
+
     db.query("DELETE FROM call_requests WHERE timestamp < ? AND status = 'calling'", [twoMinutesAgo], (err, result) => {
-        if (err) return res.json({ success: false, message: err.message });
+        if (err) {
+            console.log("❌ Error cleaning up calls:", err);
+            return res.json({ success: false, message: err.message });
+        }
+        
+        console.log(`✅ Deleted ${result.affectedRows} expired calls`);
         res.json({ success: true, message: `Deleted ${result.affectedRows} expired calls` });
     });
 });
