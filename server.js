@@ -1,13 +1,16 @@
 // server.js
+
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const app = express();
+const Pushy = require('pushy');
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const session = require('express-session');
 
 
+const pushyAPI = new Pushy(process.env.PUSHY_SECRET_API_KEY || 'bec0e0cb9c5ff06a8cf30997419b974fdb28a75ba6e45909f6634df9aa0402e5');
 
 
 // ---- SESSION MANAGEMENT ----
@@ -341,7 +344,49 @@ db.query(createScreenshotEventsTable, (err) => {
 // ======================================================
 // HELPER FUNCTIONS
 // ======================================================
+async function sendPushNotification(userId, payload) {
+    try {
+        // Get user's FCM token from database
+        db.query(
+            "SELECT fcmToken FROM users WHERE uid = ?",
+            [userId],
+            async (err, results) => {
+                if (err) {
+                    console.error(`❌ Database error fetching FCM token for ${userId}:`, err);
+                    return;
+                }
+                
+                if (results.length === 0 || !results[0].fcmToken) {
+                    console.log(`❌ No FCM token found for user: ${userId}`);
+                    return;
+                }
 
+                const deviceToken = results[0].fcmToken;
+                
+                try {
+                    // Send push notification via Pushy (v4 requires array of tokens)
+                    await pushyAPI.sendPushNotification(
+                        payload,
+                        [deviceToken], // ⚠️ IMPORTANT: Array of tokens for v4
+                        {
+                            notification: {
+                                badge: 1,
+                                sound: 'default',
+                                body: payload.message
+                            }
+                        }
+                    );
+                    
+                    console.log(`✅ Push notification sent to ${userId} (${payload.type})`);
+                } catch (pushError) {
+                    console.error(`❌ Pushy send error for ${userId}:`, pushError.message || pushError);
+                }
+            }
+        );
+    } catch (error) {
+        console.error('❌ Error in sendPushNotification:', error);
+    }
+}
 function generateUniqueUid() {
     return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
@@ -1403,13 +1448,25 @@ app.post("/messages/send", (req, res) => {
         (err) => {
             if (err) return res.json({ success: false, message: "Database error: " + err.message });
 
-            // Get sender's username and create pending notification
-            db.query("SELECT username FROM users WHERE uid = ?", [senderId], (err, results) => {
+            // Get sender's info and send push notification
+            db.query("SELECT username, profileImage FROM users WHERE uid = ?", [senderId], (err, results) => {
                 if (!err && results.length > 0) {
-                    const senderUsername = results[0].username;
+                    const sender = results[0];
                     const displayText = imageData ? "📷 Sent a photo" : (messageText.length > 100 ? messageText.substring(0, 100) + "..." : messageText);
                     
-                    createPendingNotification(receiverUid, senderId, senderUsername, "message", displayText);
+                    // Create pending notification for polling
+                    createPendingNotification(receiverUid, senderId, sender.username, "message", displayText);
+                    
+                    // Send push notification via Pushy
+                    sendPushNotification(receiverUid, {
+                        type: 'message',
+                        title: sender.username,
+                        message: displayText,
+                        senderId: senderId,
+                        senderUsername: sender.username,
+                        chatId: chatId,
+                        profileImage: sender.profileImage || ''
+                    });
                 }
             });
 
@@ -1599,17 +1656,27 @@ app.post("/screenshots/record", (req, res) => {
                 }
             );
 
-            // Create pending notification for screenshot
+            // Get other user ID
             const parts = chatId.split('_');
             const otherUserId = parts[0] === userId ? parts[1] : parts[0];
             
+            // Create pending notification for polling
             createPendingNotification(otherUserId, userId, username, "screenshot", "took a screenshot of your chat");
+            
+            // Send push notification via Pushy
+            sendPushNotification(otherUserId, {
+                type: 'screenshot',
+                title: 'Screenshot Detected',
+                message: `${username} took a screenshot`,
+                senderId: userId,
+                senderUsername: username,
+                chatId: chatId
+            });
 
             res.json({ success: true, message: "Screenshot recorded", messageId });
         }
     );
 });
-
 app.get("/screenshots/:chatId", (req, res) => {
     const { chatId } = req.params;
     const limit = parseInt(req.query.limit) || 50;
@@ -1719,7 +1786,6 @@ app.get("/users/presence/:userId", (req, res) => {
 // ======================================================
 // CALL ENDPOINTS - FIXED VERSION
 // ======================================================
-
 app.post("/call/initiate", (req, res) => {
     const { caller_id, caller_name, caller_profile_image, receiver_id, channel_name, call_type } = req.body;
 
@@ -1776,30 +1842,41 @@ app.post("/call/initiate", (req, res) => {
 
                 console.log(`✅ Call request created: ${call_id} (${caller_name} → ${receiver_id})`);
                 
-                // Return success immediately
+                // Create pending notification for polling
+                createPendingNotification(
+                    receiver_id, 
+                    caller_id, 
+                    caller_name, 
+                    "incoming_call", 
+                    `Incoming ${call_type} call`,
+                    { 
+                        callId: call_id, 
+                        channelName: channel_name, 
+                        callType: call_type, 
+                        callerProfileImage: caller_profile_image || "" 
+                    }
+                );
+                
+                // Send push notification via Pushy
+                sendPushNotification(receiver_id, {
+                    type: 'incoming_call',
+                    title: `Incoming ${call_type} call`,
+                    message: `${caller_name} is calling...`,
+                    senderId: caller_id,
+                    senderUsername: caller_name,
+                    callId: call_id,
+                    channelName: channel_name,
+                    callType: call_type,
+                    profileImage: caller_profile_image || ''
+                });
+                
+                // Return success
                 res.json({ 
                     success: true, 
                     message: "Call request created", 
                     call_id, 
                     channel_name 
                 });
-
-                // Create notification asynchronously (don't wait for it)
-                if (typeof createPendingNotification === 'function') {
-                    createPendingNotification(
-                        receiver_id, 
-                        caller_id, 
-                        caller_name, 
-                        "incoming_call", 
-                        `Incoming ${call_type} call`,
-                        { 
-                            callId: call_id, 
-                            channelName: channel_name, 
-                            callType: call_type, 
-                            callerProfileImage: caller_profile_image || "" 
-                        }
-                    );
-                }
             }
         );
     });

@@ -18,7 +18,9 @@
     "express-session": "^1.18.2",
     "mysql2": "^3.15.3",
     "onesignal-node": "^3.4.0",
+    "pushy": "^4.0.3",
     "uuid": "^13.0.0"
+
   },
   "repository": {
     "type": "git",
