@@ -10,7 +10,18 @@ const session = require('express-session');
 
 // Add this at the top of your server.js after other requires
 const admin = require('firebase-admin');
-const serviceAccount = require('./sociallypush-firebase-adminsdk-fbsvc-9b53faa195.json');
+
+
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, "base64").toString("utf-8")
+);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+console.log("✅ Firebase loaded from Railway environment variable");
+
 
 // Initialize Firebase Admin
 admin.initializeApp({
