@@ -1,16 +1,24 @@
 // server.js
-
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const app = express();
-const Pushy = require('pushy');
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const session = require('express-session');
 
 
-const pushyAPI = new Pushy(process.env.PUSHY_SECRET_API_KEY || 'bec0e0cb9c5ff06a8cf30997419b974fdb28a75ba6e45909f6634df9aa0402e5');
+// Add this at the top of your server.js after other requires
+const admin = require('firebase-admin');
+const serviceAccount = require('./sociallypush-firebase-adminsdk-fbsvc-9b53faa195.json');
+
+// Initialize Firebase Admin
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+console.log("✅ Firebase Admin initialized");
+
 
 
 // ---- SESSION MANAGEMENT ----
@@ -344,49 +352,77 @@ db.query(createScreenshotEventsTable, (err) => {
 // ======================================================
 // HELPER FUNCTIONS
 // ======================================================
-async function sendPushNotification(userId, payload) {
-    try {
-        // Get user's FCM token from database
-        db.query(
-            "SELECT fcmToken FROM users WHERE uid = ?",
-            [userId],
-            async (err, results) => {
-                if (err) {
-                    console.error(`❌ Database error fetching FCM token for ${userId}:`, err);
-                    return;
-                }
-                
-                if (results.length === 0 || !results[0].fcmToken) {
-                    console.log(`❌ No FCM token found for user: ${userId}`);
-                    return;
-                }
 
-                const deviceToken = results[0].fcmToken;
-                
-                try {
-                    // Send push notification via Pushy (v4 requires array of tokens)
-                    await pushyAPI.sendPushNotification(
-                        payload,
-                        [deviceToken], // ⚠️ IMPORTANT: Array of tokens for v4
-                        {
-                            notification: {
-                                badge: 1,
-                                sound: 'default',
-                                body: payload.message
-                            }
-                        }
-                    );
-                    
-                    console.log(`✅ Push notification sent to ${userId} (${payload.type})`);
-                } catch (pushError) {
-                    console.error(`❌ Pushy send error for ${userId}:`, pushError.message || pushError);
+// ======================================================
+// FCM HELPER FUNCTIONS
+// ======================================================
+
+/**
+ * Send FCM notification to a specific user
+ */
+async function sendFCMNotification(userId, title, body, data = {}) {
+    try {
+        // Get user's FCM token
+        const result = await new Promise((resolve, reject) => {
+            db.query(
+                "SELECT fcmToken FROM users WHERE uid = ?",
+                [userId],
+                (err, results) => {
+                    if (err) reject(err);
+                    else resolve(results);
+                }
+            );
+        });
+
+        if (result.length === 0 || !result[0].fcmToken) {
+            console.log(`⚠️ No FCM token for user ${userId}`);
+            return false;
+        }
+
+        const fcmToken = result[0].fcmToken;
+
+        // Prepare FCM message
+        const message = {
+            token: fcmToken,
+            notification: {
+                title: title,
+                body: body
+            },
+            data: {
+                ...data,
+                timestamp: Date.now().toString()
+            },
+            android: {
+                priority: 'high',
+                notification: {
+                    sound: 'default',
+                    channelId: 'socially_notifications'
                 }
             }
-        );
-    } catch (error) {
-        console.error('❌ Error in sendPushNotification:', error);
+        };
+
+        // Send notification
+        const response = await admin.messaging().send(message);
+        console.log(`FCM sent to ${userId}: ${response}`);
+return true;
+
+} catch (error) {
+    console.error(`❌ Error sending FCM to ${userId}:`, error);
+
+    if (
+        error.code === 'messaging/invalid-registration-token' || 
+        error.code === 'messaging/registration-token-not-registered'
+    ) {
+        db.query("UPDATE users SET fcmToken = '' WHERE uid = ?", [userId]);
+        console.log(`🗑️ Cleared invalid FCM token for user ${userId}`);
+    }
+
+        
+        return false;
     }
 }
+
+
 function generateUniqueUid() {
     return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
@@ -394,7 +430,7 @@ function generateUniqueUid() {
 // NEW: Create pending notification
 function createPendingNotification(userId, senderId, senderUsername, type, message, extraData = null) {
     const timestamp = Date.now();
-    
+   
     db.query(
         `INSERT INTO pending_notifications (user_id, sender_id, sender_username, type, message, extra_data, timestamp)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -412,7 +448,7 @@ function createPendingNotification(userId, senderId, senderUsername, type, messa
 // Existing createNotification function (for your notifications screen)
 function createNotification(userId, fromUserId, fromUsername, fromProfileImage, message, type, postImage = null) {
     const timestamp = Date.now();
-    
+   
     db.query(
         `INSERT INTO notifications (userId, fromUserId, fromUsername, fromProfileImage, message, type, postImage, timestamp)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -476,7 +512,7 @@ app.post("/register", (req, res) => {
 
             const insertQuery = `
                 INSERT INTO users
-                (uid, username, username_lower, name, lastname, email, password, dob, profileImage, 
+                (uid, username, username_lower, name, lastname, email, password, dob, profileImage,
                  profilePicture, bio, website, followersCount, followingCount, postCount, fcmToken)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 0, 0, 0, '')`;
 
@@ -491,8 +527,8 @@ app.post("/register", (req, res) => {
 
                 console.log(`✅ User registered: ${username} (UID: ${uid})`);
 
-                res.json({ 
-                    success: true, 
+                res.json({
+                    success: true,
                     message: "Registration successful",
                     user: {
                         uid, username, username_lower: username.toLowerCase(), name, lastname, email,
@@ -613,7 +649,7 @@ app.post("/users/search", (req, res) => {
 
     switch (filter) {
         case "Followers":
-            sqlQuery = `SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage, 
+            sqlQuery = `SELECT DISTINCT u.uid, u.username, u.name, u.email, u.profileImage,
                        u.bio, u.followersCount, u.followingCount, u.postCount
                 FROM users u INNER JOIN followers f ON u.uid = f.followerId
                 WHERE f.userId = ? AND u.uid != ? AND u.username_lower LIKE ? ORDER BY u.username LIMIT 50`;
@@ -799,7 +835,7 @@ app.get("/users/:userId/following", (req, res) => {
 // FOLLOW REQUEST ENDPOINTS
 // ======================================================
 
-app.post("/users/sendFollowRequest", (req, res) => {
+app.post("/users/sendFollowRequest", async (req, res) => {
     const { currentUserId, targetUserId } = req.body;
 
     if (!currentUserId || !targetUserId || currentUserId === targetUserId) {
@@ -818,16 +854,28 @@ app.post("/users/sendFollowRequest", (req, res) => {
             db.query(
                 "INSERT INTO follow_requests (senderId, receiverId, timestamp, status) VALUES (?, ?, ?, 'pending')",
                 [currentUserId, targetUserId, timestamp],
-                (err) => {
+                async (err) => {
                     if (err) {
                         if (err.code === 'ER_DUP_ENTRY') return res.json({ success: false, message: "Request already sent" });
                         return res.json({ success: false, message: err.message });
                     }
 
-                    // Get sender info and create notifications
-                    db.query("SELECT username, profileImage FROM users WHERE uid = ?", [currentUserId], (err, userResults) => {
+                    // Get sender info
+                    db.query("SELECT username, profileImage FROM users WHERE uid = ?", [currentUserId], async (err, userResults) => {
                         if (!err && userResults.length > 0) {
                             const sender = userResults[0];
+                            
+                            // Send FCM notification
+                            await sendFCMNotification(
+                                targetUserId,
+                                "New Follow Request",
+                                `${sender.username} wants to follow you`,
+                                {
+                                    type: "follow_request",
+                                    senderId: currentUserId,
+                                    senderUsername: sender.username
+                                }
+                            );
                             
                             // Create in-app notification
                             createNotification(
@@ -835,7 +883,7 @@ app.post("/users/sendFollowRequest", (req, res) => {
                                 sender.profileImage || "", "sent you a follow request", "follow_request"
                             );
                             
-                            // Create pending notification for polling
+                            // Create pending notification (backup)
                             createPendingNotification(
                                 targetUserId, currentUserId, sender.username,
                                 "follow_request", "wants to follow you"
@@ -1328,7 +1376,7 @@ app.get("/notifications/:userId", (req, res) => {
 
     let notificationsQuery = `SELECT id as notificationId, userId, fromUserId, fromUsername, fromProfileImage,
         message, type, postImage, timestamp, isRead FROM notifications WHERE userId = ?`;
-    
+   
     if (!includeRead) notificationsQuery += ` AND isRead = FALSE`;
 
     const followRequestsQuery = `SELECT fr.id as notificationId, fr.receiverId as userId, fr.senderId as fromUserId,
@@ -1391,7 +1439,7 @@ app.get("/notifications/pending/:userId", (req, res) => {
     const { userId } = req.params;
 
     db.query(
-        `SELECT * FROM pending_notifications WHERE user_id = ? AND delivered = FALSE 
+        `SELECT * FROM pending_notifications WHERE user_id = ? AND delivered = FALSE
          ORDER BY timestamp DESC LIMIT 20`,
         [userId],
         (err, results) => {
@@ -1427,7 +1475,7 @@ app.delete("/notifications/cleanup", (req, res) => {
 // MESSAGING ENDPOINTS
 // ======================================================
 
-app.post("/messages/send", (req, res) => {
+app.post("/messages/send", async (req, res) => {
     const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage } = req.body;
 
     if (!senderId || !receiverUid) {
@@ -1445,32 +1493,52 @@ app.post("/messages/send", (req, res) => {
         `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
         [messageId || `msg_${Date.now()}`, senderId, receiverUid, chatId, messageText || null, imageData || null, actualTimestamp, isSystemMessage || false],
-        (err) => {
+        async (err) => {
             if (err) return res.json({ success: false, message: "Database error: " + err.message });
 
-            // Get sender's info and send push notification
-            db.query("SELECT username, profileImage FROM users WHERE uid = ?", [senderId], (err, results) => {
+            // Get sender's username
+            db.query("SELECT username, profileImage FROM users WHERE uid = ?", [senderId], async (err, results) => {
                 if (!err && results.length > 0) {
-                    const sender = results[0];
-                    const displayText = imageData ? "📷 Sent a photo" : (messageText.length > 100 ? messageText.substring(0, 100) + "..." : messageText);
+                    const senderUsername = results[0].username;
+                    const senderProfileImage = results[0].profileImage || "";
                     
-                    // Create pending notification for polling
-                    createPendingNotification(receiverUid, senderId, sender.username, "message", displayText);
+                    // Prepare notification
+                    let notificationTitle = senderUsername;
+                    let notificationBody = "";
                     
-                    // Send push notification via Pushy
-                    sendPushNotification(receiverUid, {
-                        type: 'message',
-                        title: sender.username,
-                        message: displayText,
-                        senderId: senderId,
-                        senderUsername: sender.username,
-                        chatId: chatId,
-                        profileImage: sender.profileImage || ''
-                    });
+                    if (imageData) {
+                        notificationBody = "📷 Sent a photo";
+                    } else {
+                        notificationBody = messageText.length > 100 ? 
+                            messageText.substring(0, 100) + "..." : 
+                            messageText;
+                    }
+
+                    // Send FCM notification
+                    await sendFCMNotification(
+                        receiverUid,
+                        notificationTitle,
+                        notificationBody,
+                        {
+                            type: "message",
+                            senderId: senderId,
+                            senderUsername: senderUsername,
+                            chatId: chatId,
+                            messageId: messageId || `msg_${Date.now()}`
+                        }
+                    );
+
+                    // Create pending notification for polling (backup)
+                    createPendingNotification(receiverUid, senderId, senderUsername, "message", notificationBody);
                 }
             });
 
-            res.json({ success: true, message: "Message sent successfully", messageId: messageId || `msg_${Date.now()}`, chatId });
+            res.json({ 
+                success: true, 
+                message: "Message sent successfully", 
+                messageId: messageId || `msg_${Date.now()}`, 
+                chatId 
+            });
         }
     );
 });
@@ -1545,7 +1613,7 @@ app.post("/conversations/update", (req, res) => {
 
     db.query(
         `INSERT INTO conversations (userId, otherUserId, otherUsername, otherUserImage, lastMessage, timestamp, unreadCount)
-         VALUES (?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE 
+         VALUES (?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE
          otherUsername = VALUES(otherUsername), otherUserImage = VALUES(otherUserImage),
          lastMessage = VALUES(lastMessage), timestamp = VALUES(timestamp)`,
         [userId, otherUserId, otherUsername, otherUserImage || "", lastMessage, actualTimestamp],
@@ -1575,7 +1643,7 @@ app.post("/messages/markSeen", (req, res) => {
     const seenAt = Date.now();
 
     db.query(
-        `UPDATE messages SET seenAt = ?, isVanishMode = TRUE 
+        `UPDATE messages SET seenAt = ?, isVanishMode = TRUE
          WHERE chatId = ? AND receiverId = ? AND seenAt IS NULL`,
         [seenAt, chatId, userId],
         (err, result) => {
@@ -1630,7 +1698,7 @@ app.get("/users/search/:query", (req, res) => {
 // SCREENSHOT ENDPOINTS
 // ======================================================
 
-app.post("/screenshots/record", (req, res) => {
+app.post("/screenshots/record", async (req, res) => {
     const { chatId, userId, username, timestamp } = req.body;
 
     if (!chatId || !userId || !username) {
@@ -1642,11 +1710,12 @@ app.post("/screenshots/record", (req, res) => {
     db.query(
         `INSERT INTO screenshot_events (chatId, userId, username, timestamp) VALUES (?, ?, ?, ?)`,
         [chatId, userId, username, actualTimestamp],
-        (err) => {
+        async (err) => {
             if (err) return res.json({ success: false, message: err.message });
 
             const messageId = `msg_screenshot_${Date.now()}`;
             
+            // Create system message
             db.query(
                 `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, timestamp, isSystemMessage, isVanishMode)
                  VALUES (?, ?, ?, ?, ?, ?, TRUE, FALSE)`,
@@ -1656,27 +1725,31 @@ app.post("/screenshots/record", (req, res) => {
                 }
             );
 
-            // Get other user ID
+            // Get the other user ID from chatId
             const parts = chatId.split('_');
             const otherUserId = parts[0] === userId ? parts[1] : parts[0];
             
-            // Create pending notification for polling
+            // Send FCM notification about screenshot
+            await sendFCMNotification(
+                otherUserId,
+                "Screenshot Alert! 📸",
+                `${username} took a screenshot of your chat`,
+                {
+                    type: "screenshot",
+                    senderId: userId,
+                    senderUsername: username,
+                    chatId: chatId
+                }
+            );
+
+            // Create pending notification (backup)
             createPendingNotification(otherUserId, userId, username, "screenshot", "took a screenshot of your chat");
-            
-            // Send push notification via Pushy
-            sendPushNotification(otherUserId, {
-                type: 'screenshot',
-                title: 'Screenshot Detected',
-                message: `${username} took a screenshot`,
-                senderId: userId,
-                senderUsername: username,
-                chatId: chatId
-            });
 
             res.json({ success: true, message: "Screenshot recorded", messageId });
         }
     );
 });
+
 app.get("/screenshots/:chatId", (req, res) => {
     const { chatId } = req.params;
     const limit = parseInt(req.query.limit) || 50;
@@ -1741,7 +1814,7 @@ app.post("/users/presence/update", (req, res) => {
                 console.log("❌ Error updating presence:", err);
                 return res.status(500).json({ success: false, message: err.message });
             }
-            
+           
             console.log(`✅ Presence updated for ${userId}`);
             res.json({ success: true, message: "Presence updated" });
         }
@@ -1758,7 +1831,7 @@ app.get("/users/presence/:userId", (req, res) => {
             console.log("❌ Database error:", err);
             return res.status(500).json({ success: false, message: err.message });
         }
-        
+       
         if (results.length === 0) {
             console.log(`⚠️ No presence record found for ${userId} - treating as offline`);
             return res.json({ success: true, isOnline: false, lastSeen: 0 });
@@ -1775,10 +1848,10 @@ app.get("/users/presence/:userId", (req, res) => {
             time_diff_ms: Date.now() - presence.last_seen
         });
 
-        res.json({ 
-            success: true, 
-            isOnline, 
-            lastSeen: presence.last_seen 
+        res.json({
+            success: true,
+            isOnline,
+            lastSeen: presence.last_seen
         });
     });
 });
@@ -1786,6 +1859,7 @@ app.get("/users/presence/:userId", (req, res) => {
 // ======================================================
 // CALL ENDPOINTS - FIXED VERSION
 // ======================================================
+
 app.post("/call/initiate", (req, res) => {
     const { caller_id, caller_name, caller_profile_image, receiver_id, channel_name, call_type } = req.body;
 
@@ -1811,9 +1885,9 @@ app.post("/call/initiate", (req, res) => {
         // Check if user is online (updated within last 30 seconds)
         const thirtySecondsAgo = Date.now() - 30000;
         const isOnline = results.length > 0 && results[0].is_online && results[0].last_seen > thirtySecondsAgo;
-        
-        console.log("🔍 Receiver presence check:", { 
-            receiver_id, 
+       
+        console.log("🔍 Receiver presence check:", {
+            receiver_id,
             has_record: results.length > 0,
             is_online_flag: results.length > 0 ? results[0].is_online : false,
             last_seen: results.length > 0 ? new Date(results[0].last_seen).toISOString() : 'never',
@@ -1841,42 +1915,31 @@ app.post("/call/initiate", (req, res) => {
                 }
 
                 console.log(`✅ Call request created: ${call_id} (${caller_name} → ${receiver_id})`);
-                
-                // Create pending notification for polling
-                createPendingNotification(
-                    receiver_id, 
-                    caller_id, 
-                    caller_name, 
-                    "incoming_call", 
-                    `Incoming ${call_type} call`,
-                    { 
-                        callId: call_id, 
-                        channelName: channel_name, 
-                        callType: call_type, 
-                        callerProfileImage: caller_profile_image || "" 
-                    }
-                );
-                
-                // Send push notification via Pushy
-                sendPushNotification(receiver_id, {
-                    type: 'incoming_call',
-                    title: `Incoming ${call_type} call`,
-                    message: `${caller_name} is calling...`,
-                    senderId: caller_id,
-                    senderUsername: caller_name,
-                    callId: call_id,
-                    channelName: channel_name,
-                    callType: call_type,
-                    profileImage: caller_profile_image || ''
+               
+                // Return success immediately
+                res.json({
+                    success: true,
+                    message: "Call request created",
+                    call_id,
+                    channel_name
                 });
-                
-                // Return success
-                res.json({ 
-                    success: true, 
-                    message: "Call request created", 
-                    call_id, 
-                    channel_name 
-                });
+
+                // Create notification asynchronously (don't wait for it)
+                if (typeof createPendingNotification === 'function') {
+                    createPendingNotification(
+                        receiver_id,
+                        caller_id,
+                        caller_name,
+                        "incoming_call",
+                        `Incoming ${call_type} call`,
+                        {
+                            callId: call_id,
+                            channelName: channel_name,
+                            callType: call_type,
+                            callerProfileImage: caller_profile_image || ""
+                        }
+                    );
+                }
             }
         );
     });
@@ -1888,8 +1951,8 @@ app.get("/call/incoming/:userId", (req, res) => {
     console.log(`🔍 Checking incoming calls for user: ${userId}`);
 
     db.query(
-        `SELECT * FROM call_requests 
-         WHERE receiver_id = ? AND status = 'calling' 
+        `SELECT * FROM call_requests
+         WHERE receiver_id = ? AND status = 'calling'
          ORDER BY timestamp DESC LIMIT 10`,
         [userId],
         (err, results) => {
@@ -1897,7 +1960,7 @@ app.get("/call/incoming/:userId", (req, res) => {
                 console.log("❌ Error fetching calls:", err);
                 return res.status(500).json({ success: false, message: err.message });
             }
-            
+           
             console.log(`📋 Found ${results.length} pending call(s) for ${userId}`);
             res.json(results);
         }
@@ -1916,7 +1979,7 @@ app.get("/call/:callId/status", (req, res) => {
             console.log("❌ Call not found:", callId);
             return res.status(404).json({ success: false, message: "Call not found" });
         }
-        
+       
         const status = results[0].status;
         console.log(`📊 Call ${callId} status: ${status}`);
         res.json({ success: true, status });
@@ -1943,7 +2006,7 @@ app.put("/call/:callId/status", (req, res) => {
             console.log("❌ Call not found");
             return res.status(404).json({ success: false, message: "Call not found" });
         }
-        
+       
         console.log(`✅ Call status updated: ${callId} → ${status}`);
         res.json({ success: true, message: "Status updated" });
     });
@@ -1959,7 +2022,7 @@ app.delete("/call/:callId", (req, res) => {
             console.log("❌ Error deleting call:", err);
             return res.status(500).json({ success: false, message: err.message });
         }
-        
+       
         console.log(`✅ Call deleted: ${callId}`);
         res.json({ success: true, message: "Call request deleted" });
     });
@@ -1975,11 +2038,43 @@ app.delete("/call/cleanup", (req, res) => {
             console.log("❌ Error cleaning up calls:", err);
             return res.status(500).json({ success: false, message: err.message });
         }
-        
+       
         console.log(`✅ Deleted ${result.affectedRows} expired calls`);
         res.json({ success: true, message: `Deleted ${result.affectedRows} expired calls` });
     });
 });
+
+app.post("/users/updateFcmToken", (req, res) => {
+    const { userId, fcmToken } = req.body;
+
+    if (!userId || !fcmToken) {
+        return res.json({ success: false, message: "Missing required fields" });
+    }
+
+    db.query(
+        "UPDATE users SET fcmToken = ? WHERE uid = ?",
+        [fcmToken, userId],
+        (err) => {
+            if (err) return res.json({ success: false, message: err.message });
+            console.log(`✅ FCM token updated for user: ${userId}`);
+            res.json({ success: true, message: "FCM token updated" });
+        }
+    );
+});
+
+
+// Test endpoint to send notification
+app.post("/test/notification", async (req, res) => {
+    const { userId, title, body } = req.body;
+    
+    const success = await sendFCMNotification(userId, title, body, { type: "test" });
+    
+    res.json({ 
+        success, 
+        message: success ? "Notification sent" : "Failed to send notification" 
+    });
+});
+
 
 // ======================================================
 // GLOBAL ERROR HANDLING
