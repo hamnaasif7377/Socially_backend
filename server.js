@@ -806,13 +806,17 @@ app.post("/users/isFollowing", (req, res) => {
     );
 });
 
-// Replace your existing followers/following GET endpoints with these:
+// ======================================================
+// FOLLOWERS & FOLLOWING ENDPOINTS (FIXED)
+// ======================================================
 
 app.get("/users/:userId/followers", (req, res) => {
     const { userId } = req.params;
 
+    console.log(`📥 Fetching followers for user: ${userId}`);
+
     db.query(
-        `SELECT u.uid as userId, u.username, u.name, u.lastname, u.profileImage, 
+        `SELECT u.uid, u.username, u.name, u.lastname, u.profileImage, 
                 u.profilePicture, u.bio, u.followersCount, u.followingCount, u.postCount
          FROM users u 
          INNER JOIN followers f ON u.uid = f.followerId
@@ -821,14 +825,13 @@ app.get("/users/:userId/followers", (req, res) => {
         [userId],
         (err, results) => {
             if (err) {
-                console.error("Error fetching followers:", err);
+                console.error("❌ Error fetching followers:", err);
                 return res.status(500).json([]);
             }
             
-            // Map results to ensure consistent property names
+            // Map results to ensure consistent property names (using uid)
             const followers = results.map(user => ({
-                userId: user.userId,
-                uid: user.userId,
+                uid: user.uid,                          // Primary field
                 username: user.username,
                 name: user.name || "",
                 lastname: user.lastname || "",
@@ -849,8 +852,10 @@ app.get("/users/:userId/followers", (req, res) => {
 app.get("/users/:userId/following", (req, res) => {
     const { userId } = req.params;
 
+    console.log(`📥 Fetching following for user: ${userId}`);
+
     db.query(
-        `SELECT u.uid as userId, u.username, u.name, u.lastname, u.profileImage, 
+        `SELECT u.uid, u.username, u.name, u.lastname, u.profileImage, 
                 u.profilePicture, u.bio, u.followersCount, u.followingCount, u.postCount
          FROM users u 
          INNER JOIN followers f ON u.uid = f.userId
@@ -859,14 +864,13 @@ app.get("/users/:userId/following", (req, res) => {
         [userId],
         (err, results) => {
             if (err) {
-                console.error("Error fetching following:", err);
+                console.error("❌ Error fetching following:", err);
                 return res.status(500).json([]);
             }
             
-            // Map results to ensure consistent property names
+            // Map results to ensure consistent property names (using uid)
             const following = results.map(user => ({
-                userId: user.userId,
-                uid: user.userId,
+                uid: user.uid,                          // Primary field
                 username: user.username,
                 name: user.name || "",
                 lastname: user.lastname || "",
