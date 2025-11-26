@@ -1588,7 +1588,7 @@ app.delete("/notifications/cleanup", (req, res) => {
 // ======================================================
 
 app.post("/messages/send", async (req, res) => {
-    const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage } = req.body;
+    const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage, sharedPostId, sharedPostPreview } = req.body;
 
     if (!senderId || !receiverUid) {
         return res.json({ success: false, message: "Missing required fields: senderId and receiverUid" });
@@ -1602,13 +1602,27 @@ app.post("/messages/send", async (req, res) => {
     const actualTimestamp = timestamp || Date.now();
 
     db.query(
-        `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE)`,
-        [messageId || `msg_${Date.now()}`, senderId, receiverUid, chatId, messageText || null, imageData || null, actualTimestamp, isSystemMessage || false],
+        `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode, sharedPostId, sharedPostPreview)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)`,
+        [
+            actualMessageId, 
+            senderId, 
+            receiverUid, 
+            chatId, 
+            messageText || null, 
+            imageData || null, 
+            actualTimestamp, 
+            isSystemMessage || false,
+            sharedPostId || null,
+            sharedPostPreview || null
+        ],
         async (err) => {
-            if (err) return res.json({ success: false, message: "Database error: " + err.message });
+            if (err) {
+                console.error("Error inserting message:", err);
+                return res.json({ success: false, message: "Database error: " + err.message });
+            }
 
-            // Get sender's username
+            // Get sender's username and profile image
             db.query("SELECT username, profileImage FROM users WHERE uid = ?", [senderId], async (err, results) => {
                 if (!err && results.length > 0) {
                     const senderUsername = results[0].username;
@@ -1618,12 +1632,14 @@ app.post("/messages/send", async (req, res) => {
                     let notificationTitle = senderUsername;
                     let notificationBody = "";
                     
-                    if (imageData) {
+                    if (sharedPostId) {
+                        notificationBody = "📤 Shared a post with you";
+                    } else if (imageData) {
                         notificationBody = "📷 Sent a photo";
                     } else {
-                        notificationBody = messageText.length > 100 ? 
+                        notificationBody = messageText && messageText.length > 100 ? 
                             messageText.substring(0, 100) + "..." : 
-                            messageText;
+                            messageText || "";
                     }
 
                     // Send FCM notification
@@ -1636,24 +1652,32 @@ app.post("/messages/send", async (req, res) => {
                             senderId: senderId,
                             senderUsername: senderUsername,
                             chatId: chatId,
-                            messageId: messageId || `msg_${Date.now()}`
+                            messageId: actualMessageId,
+                            hasSharedPost: sharedPostId ? "true" : "false"
                         }
                     );
 
                     // Create pending notification for polling (backup)
-                    createPendingNotification(receiverUid, senderId, senderUsername, "message", notificationBody);
+                    createPendingNotification(
+                        receiverUid, 
+                        senderId, 
+                        senderUsername, 
+                        "message", 
+                        notificationBody
+                    );
                 }
             });
 
             res.json({ 
                 success: true, 
                 message: "Message sent successfully", 
-                messageId: messageId || `msg_${Date.now()}`, 
+                messageId: actualMessageId, 
                 chatId 
             });
         }
     );
 });
+
 
 app.put("/messages/edit", (req, res) => {
     const { messageId, newText, senderId } = req.body;
