@@ -354,6 +354,61 @@ db.query(createScreenshotEventsTable, (err) => {
     else console.log("✅ Screenshot events table ready");
 });
 
+
+db.query(`
+    SELECT COUNT(*) as count 
+    FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_SCHEMA = DATABASE() 
+    AND TABLE_NAME = 'messages' 
+    AND COLUMN_NAME = 'sharedPostId'
+`, (err, results) => {
+    if (err) {
+        console.error("Error checking sharedPostId column:", err);
+    } else if (results[0].count === 0) {
+        db.query(`
+            ALTER TABLE messages 
+            ADD COLUMN sharedPostId VARCHAR(255),
+            ADD INDEX idx_sharedPostId (sharedPostId)
+        `, (err) => {
+            if (err) {
+                console.error("Error adding sharedPostId column:", err);
+            } else {
+                console.log("✅ Added sharedPostId column to messages table");
+            }
+        });
+    } else {
+        console.log("✅ sharedPostId column already exists");
+    }
+});
+
+// Check and add sharedPostPreview column to messages table
+db.query(`
+    SELECT COUNT(*) as count 
+    FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_SCHEMA = DATABASE() 
+    AND TABLE_NAME = 'messages' 
+    AND COLUMN_NAME = 'sharedPostPreview'
+`, (err, results) => {
+    if (err) {
+        console.error("Error checking sharedPostPreview column:", err);
+    } else if (results[0].count === 0) {
+        db.query(`
+            ALTER TABLE messages 
+            ADD COLUMN sharedPostPreview JSON
+        `, (err) => {
+            if (err) {
+                console.error("Error adding sharedPostPreview column:", err);
+            } else {
+                console.log("✅ Added sharedPostPreview column to messages table");
+            }
+        });
+    } else {
+        console.log("✅ sharedPostPreview column already exists");
+    }
+});
+
+
+
 // ======================================================
 // HELPER FUNCTIONS
 // ======================================================
