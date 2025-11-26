@@ -1587,6 +1587,8 @@ app.delete("/notifications/cleanup", (req, res) => {
 // MESSAGING ENDPOINTS
 // ======================================================
 
+// Replace your /messages/send endpoint with this fixed version:
+
 app.post("/messages/send", async (req, res) => {
     const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage, sharedPostId, sharedPostPreview } = req.body;
 
@@ -1594,12 +1596,25 @@ app.post("/messages/send", async (req, res) => {
         return res.json({ success: false, message: "Missing required fields: senderId and receiverUid" });
     }
 
-    if (!messageText && !imageData) {
+    if (!messageText && !imageData && !sharedPostId) {
         return res.json({ success: false, message: "Missing message content" });
     }
 
     const chatId = senderId < receiverUid ? `${senderId}_${receiverUid}` : `${receiverUid}_${senderId}`;
     const actualTimestamp = timestamp || Date.now();
+    
+    // FIX: Generate messageId if not provided
+    const actualMessageId = messageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    console.log("📨 Incoming message request:", {
+        messageId: actualMessageId,
+        senderId,
+        receiverUid,
+        messageText,
+        hasImage: !!imageData,
+        sharedPostId,
+        hasSharedPostPreview: !!sharedPostPreview
+    });
 
     db.query(
         `INSERT INTO messages (messageId, senderId, receiverId, chatId, messageText, imageData, timestamp, isSystemMessage, isVanishMode, sharedPostId, sharedPostPreview)
@@ -1614,13 +1629,15 @@ app.post("/messages/send", async (req, res) => {
             actualTimestamp, 
             isSystemMessage || false,
             sharedPostId || null,
-            sharedPostPreview || null
+            sharedPostPreview ? JSON.stringify(sharedPostPreview) : null
         ],
         async (err) => {
             if (err) {
-                console.error("Error inserting message:", err);
+                console.error("❌ Error inserting message:", err);
                 return res.json({ success: false, message: "Database error: " + err.message });
             }
+
+            console.log("✅ Message inserted successfully:", actualMessageId);
 
             // Get sender's username and profile image
             db.query("SELECT username, profileImage FROM users WHERE uid = ?", [senderId], async (err, results) => {
