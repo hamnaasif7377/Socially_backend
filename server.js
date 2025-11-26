@@ -1589,31 +1589,55 @@ app.delete("/notifications/cleanup", (req, res) => {
 
 // Replace your /messages/send endpoint with this fixed version:
 
+
 app.post("/messages/send", async (req, res) => {
     const { messageId, senderId, receiverUid, messageText, imageData, timestamp, isSystemMessage, sharedPostId, sharedPostPreview } = req.body;
 
-    if (!senderId || !receiverUid) {
-        return res.json({ success: false, message: "Missing required fields: senderId and receiverUid" });
-    }
-
-    if (!messageText && !imageData && !sharedPostId) {
-        return res.json({ success: false, message: "Missing message content" });
-    }
-
-    const chatId = senderId < receiverUid ? `${senderId}_${receiverUid}` : `${receiverUid}_${senderId}`;
-    const actualTimestamp = timestamp || Date.now();
-    
-    // FIX: Generate messageId if not provided
-    const actualMessageId = messageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
     console.log("📨 Incoming message request:", {
-        messageId: actualMessageId,
+        messageId,
         senderId,
         receiverUid,
         messageText,
         hasImage: !!imageData,
         sharedPostId,
-        hasSharedPostPreview: !!sharedPostPreview
+        sharedPostPreview: sharedPostPreview ? JSON.stringify(sharedPostPreview) : null
+    });
+
+    if (!senderId || !receiverUid) {
+        console.log("❌ Missing required fields");
+        return res.json({ success: false, message: "Missing required fields: senderId and receiverUid" });
+    }
+
+    if (!messageText && !imageData && !sharedPostId) {
+        console.log("❌ Missing message content");
+        return res.json({ success: false, message: "Missing message content" });
+    }
+
+    const chatId = senderId < receiverUid ? `${senderId}_${receiverUid}` : `${receiverUid}_${senderId}`;
+    const actualTimestamp = timestamp || Date.now();
+    const actualMessageId = messageId || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Convert sharedPostPreview to JSON string if it's an object
+    let sharedPostPreviewStr = null;
+    if (sharedPostPreview) {
+        try {
+            if (typeof sharedPostPreview === 'string') {
+                sharedPostPreviewStr = sharedPostPreview;
+            } else {
+                sharedPostPreviewStr = JSON.stringify(sharedPostPreview);
+            }
+            console.log("✅ Shared post preview stringified:", sharedPostPreviewStr);
+        } catch (e) {
+            console.error("❌ Error stringifying shared post preview:", e);
+        }
+    }
+
+    console.log("💾 Inserting message:", {
+        actualMessageId,
+        chatId,
+        messageText,
+        sharedPostId,
+        hasSharedPostPreview: !!sharedPostPreviewStr
     });
 
     db.query(
@@ -1629,7 +1653,7 @@ app.post("/messages/send", async (req, res) => {
             actualTimestamp, 
             isSystemMessage || false,
             sharedPostId || null,
-            sharedPostPreview ? JSON.stringify(sharedPostPreview) : null
+            sharedPostPreviewStr
         ],
         async (err) => {
             if (err) {
@@ -1645,7 +1669,6 @@ app.post("/messages/send", async (req, res) => {
                     const senderUsername = results[0].username;
                     const senderProfileImage = results[0].profileImage || "";
                     
-                    // Prepare notification
                     let notificationTitle = senderUsername;
                     let notificationBody = "";
                     
@@ -1674,7 +1697,7 @@ app.post("/messages/send", async (req, res) => {
                         }
                     );
 
-                    // Create pending notification for polling (backup)
+                    // Create pending notification
                     createPendingNotification(
                         receiverUid, 
                         senderId, 
@@ -1746,11 +1769,29 @@ app.delete("/messages/delete", (req, res) => {
     });
 });
 
+// Also make sure your GET /messages/:chatId endpoint looks like this:
 app.get("/messages/:chatId", (req, res) => {
     const { chatId } = req.params;
 
+    console.log(`📬 Fetching messages for chatId: ${chatId}`);
+
     db.query("SELECT * FROM messages WHERE chatId = ? ORDER BY timestamp ASC", [chatId], (err, results) => {
-        if (err) return res.status(500).json({ success: false, error: err.message });
+        if (err) {
+            console.error("❌ Error fetching messages:", err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+
+        console.log(`✅ Found ${results.length} messages for chat ${chatId}`);
+        
+        // Log first message if it has shared post
+        if (results.length > 0 && results[0].sharedPostId) {
+            console.log("📎 First message has shared post:", {
+                messageId: results[0].messageId,
+                sharedPostId: results[0].sharedPostId,
+                sharedPostPreview: results[0].sharedPostPreview ? results[0].sharedPostPreview.substring(0, 100) : null
+            });
+        }
+
         res.json({ success: true, messages: results });
     });
 });
