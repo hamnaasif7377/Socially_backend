@@ -23,12 +23,6 @@ admin.initializeApp({
 console.log("✅ Firebase loaded from Railway environment variable");
 
 
-// Initialize Firebase Admin
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
-
-console.log("✅ Firebase Admin initialized");
 
 
 
