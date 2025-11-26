@@ -806,17 +806,42 @@ app.post("/users/isFollowing", (req, res) => {
     );
 });
 
+// Replace your existing followers/following GET endpoints with these:
+
 app.get("/users/:userId/followers", (req, res) => {
     const { userId } = req.params;
 
     db.query(
-        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
-         FROM users u INNER JOIN followers f ON u.uid = f.followerId
-         WHERE f.userId = ? ORDER BY f.timestamp DESC`,
+        `SELECT u.uid as userId, u.username, u.name, u.lastname, u.profileImage, 
+                u.profilePicture, u.bio, u.followersCount, u.followingCount, u.postCount
+         FROM users u 
+         INNER JOIN followers f ON u.uid = f.followerId
+         WHERE f.userId = ? 
+         ORDER BY f.timestamp DESC`,
         [userId],
         (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, followers: results });
+            if (err) {
+                console.error("Error fetching followers:", err);
+                return res.status(500).json([]);
+            }
+            
+            // Map results to ensure consistent property names
+            const followers = results.map(user => ({
+                userId: user.userId,
+                uid: user.userId,
+                username: user.username,
+                name: user.name || "",
+                lastname: user.lastname || "",
+                profileImage: user.profileImage || "",
+                profilePicture: user.profilePicture || "",
+                bio: user.bio || "",
+                followersCount: user.followersCount || 0,
+                followingCount: user.followingCount || 0,
+                postCount: user.postCount || 0
+            }));
+            
+            console.log(`✅ Found ${followers.length} followers for user ${userId}`);
+            res.json(followers);
         }
     );
 });
@@ -825,13 +850,36 @@ app.get("/users/:userId/following", (req, res) => {
     const { userId } = req.params;
 
     db.query(
-        `SELECT u.uid, u.username, u.name, u.profileImage, u.bio
-         FROM users u INNER JOIN followers f ON u.uid = f.userId
-         WHERE f.followerId = ? ORDER BY f.timestamp DESC`,
+        `SELECT u.uid as userId, u.username, u.name, u.lastname, u.profileImage, 
+                u.profilePicture, u.bio, u.followersCount, u.followingCount, u.postCount
+         FROM users u 
+         INNER JOIN followers f ON u.uid = f.userId
+         WHERE f.followerId = ? 
+         ORDER BY f.timestamp DESC`,
         [userId],
         (err, results) => {
-            if (err) return res.json({ success: false, message: err.message });
-            res.json({ success: true, following: results });
+            if (err) {
+                console.error("Error fetching following:", err);
+                return res.status(500).json([]);
+            }
+            
+            // Map results to ensure consistent property names
+            const following = results.map(user => ({
+                userId: user.userId,
+                uid: user.userId,
+                username: user.username,
+                name: user.name || "",
+                lastname: user.lastname || "",
+                profileImage: user.profileImage || "",
+                profilePicture: user.profilePicture || "",
+                bio: user.bio || "",
+                followersCount: user.followersCount || 0,
+                followingCount: user.followingCount || 0,
+                postCount: user.postCount || 0
+            }));
+            
+            console.log(`✅ Found ${following.length} following for user ${userId}`);
+            res.json(following);
         }
     );
 });
